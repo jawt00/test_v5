@@ -1,0 +1,20 @@
+
+c:\test_v5\venv\Scripts\activate
+
+streamlit run hypothesis_validation_app.py
+
+streamlit run svg_parser
+
+streamlit run live_game_app.py 
+
+streamlit run interactive_multi_step_validation.py 
+
+
+
+
+# 로컬 파일을 드롭박스로 복사 (폴더가 없으면 자동으로 생성됨)
+./rclone.exe copy pattern_analysis_v4.db dropbox:project_db
+
+./rclone.exe copy --include "*.db" ./ dropbox:project_db
+
+

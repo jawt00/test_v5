@@ -3585,7 +3585,7 @@ def main():
             st.markdown("---")
             st.markdown(f"### 신뢰도 스킵 전략 검증 결과 (임계값 1: {skip_confidence_threshold_1}%)")
             
-            col_skip_result1, col_skip_result2, col_skip_result3, col_skip_result4, col_skip_result5 = st.columns(5)
+            col_skip_result1, col_skip_result2, col_skip_result3, col_skip_result4, col_skip_result5, col_skip_result6 = st.columns(6)
             with col_skip_result1:
                 st.metric("평균 정확도", f"{summary_skip_1.get('avg_accuracy', 0):.2f}%")
             with col_skip_result2:
@@ -3600,6 +3600,12 @@ def main():
                     st.metric("평균 첫 성공 스텝", f"{first_success:.1f}")
                 else:
                     st.metric("평균 첫 성공 스텝", "-")
+            with col_skip_result6:
+                max_first_success = summary_skip_1.get('max_first_success_step')
+                if max_first_success is not None and max_first_success > 0:
+                    st.metric("최대 첫 성공 스텝", f"{max_first_success}")
+                else:
+                    st.metric("최대 첫 성공 스텝", "-")
             
             # 추가 통계 표시
             st.markdown("---")
@@ -3770,7 +3776,7 @@ def main():
             st.markdown("---")
             st.markdown(f"### 신뢰도 스킵 전략 검증 결과 (임계값 2: {skip_confidence_threshold_2}%)")
             
-            col_skip_result2_1, col_skip_result2_2, col_skip_result2_3, col_skip_result2_4, col_skip_result2_5 = st.columns(5)
+            col_skip_result2_1, col_skip_result2_2, col_skip_result2_3, col_skip_result2_4, col_skip_result2_5, col_skip_result2_6 = st.columns(6)
             with col_skip_result2_1:
                 st.metric("평균 정확도", f"{summary_skip_2.get('avg_accuracy', 0):.2f}%")
             with col_skip_result2_2:
@@ -3785,6 +3791,12 @@ def main():
                     st.metric("평균 첫 성공 스텝", f"{first_success_2:.1f}")
                 else:
                     st.metric("평균 첫 성공 스텝", "-")
+            with col_skip_result2_6:
+                max_first_success_2 = summary_skip_2.get('max_first_success_step')
+                if max_first_success_2 is not None and max_first_success_2 > 0:
+                    st.metric("최대 첫 성공 스텝", f"{max_first_success_2}")
+                else:
+                    st.metric("최대 첫 성공 스텝", "-")
             
             # 추가 통계 표시
             st.markdown("---")

@@ -47,33 +47,34 @@ def parse_bead_road_svg(svg_code):
     - 2025-01-XX: pl_po → qR_qU, pl_ps → qR_qY, pl_pt → qR_qZ (최신 구조)
     - 2025-01-XX: qR_qU → oX_o1, qR_qY → oX_pa, qR_qZ → oX_pb (최신 구조)
     - 2025-01-XX: oX_o1 → rU_rX, oX_pa → rU_pa, oX_pb → rU_rZ (최신 구조)
+    - 2025-01-XX: rU_rX → rf_ri, rU_pa → rf_qW, rU_rZ → rf_rk (최신 구조)
     - 이전: rg_rj → qz_qC (메인 컨테이너)
     - 이전: rg_qu → qz_pO (행)
     - 이전: rg_rl → qz_qF (셀)
     
     다음 변경 시 이 부분만 수정하면 됩니다:
-    - main_container = soup.find('div', class_='rU_rX')
-    - rows = main_container.find_all('div', class_='rU_pa')
-    - cells = row.find_all('div', class_='rU_rZ')
+    - main_container = soup.find('div', class_='rf_ri')
+    - rows = main_container.find_all('div', class_='rf_qW')
+    - cells = row.find_all('div', class_='rf_rk')
     """
     soup = BeautifulSoup(svg_code, 'html.parser')
     # 그리드 초기화: 각 셀을 명시적으로 빈 문자열로 초기화
     grid = [['' for _ in range(TABLE_HEIGHT)] for _ in range(TABLE_WIDTH)]
     
     # [유지보수] 클래스명 변경 시 이 부분만 수정
-    main_container = soup.find('div', class_='rU_rX')
+    main_container = soup.find('div', class_='rf_ri')
     if not main_container:
         return grid
     
     # [유지보수] 클래스명 변경 시 이 부분만 수정
-    rows = main_container.find_all('div', class_='rU_pa')
+    rows = main_container.find_all('div', class_='rf_qW')
     
     for row_idx, row in enumerate(rows):
         if row_idx >= TABLE_HEIGHT:
             break
         
         # [유지보수] 클래스명 변경 시 이 부분만 수정
-        cells = row.find_all('div', class_='rU_rZ')
+        cells = row.find_all('div', class_='rf_rk')
         for col_idx, cell in enumerate(cells):
             if col_idx >= TABLE_WIDTH:
                 break

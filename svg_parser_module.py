@@ -181,6 +181,12 @@ def create_preprocessed_grid_strings_table():
             ON preprocessed_grid_strings(created_at)
         ''')
         
+        # grid_string에 UNIQUE 제약 추가 (기존 테이블에도 적용 가능)
+        cursor.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_grid_string_unique 
+            ON preprocessed_grid_strings(grid_string)
+        ''')
+        
         conn.commit()
         return True
         
@@ -302,6 +308,7 @@ def save_parsed_grid_string_to_db(grid_string, source_session_id=None, source_id
     """
     파싱된 grid_string을 preprocessed_grid_strings 테이블에 저장
     그리고 ngram_chunks도 자동으로 생성하여 저장
+    중복된 grid_string인 경우 기존 레코드를 반환하고 새로 저장하지 않음 (DB 레벨 중복 방지)
     
     Args:
         grid_string: 저장할 grid string
@@ -309,7 +316,7 @@ def save_parsed_grid_string_to_db(grid_string, source_session_id=None, source_id
         source_id: 소스 ID (None이면 UUID 생성)
     
     Returns:
-        int: 저장된 레코드의 id
+        int: 저장된 레코드의 id (중복인 경우 기존 레코드의 id)
     """
     # 테이블 생성 확인
     create_preprocessed_grid_strings_table()
@@ -335,9 +342,9 @@ def save_parsed_grid_string_to_db(grid_string, source_session_id=None, source_id
         if source_id is None:
             source_id = str(uuid.uuid4())
         
-        # grid_string 저장
+        # grid_string 저장 (중복 시 무시)
         cursor.execute('''
-            INSERT INTO preprocessed_grid_strings (
+            INSERT OR IGNORE INTO preprocessed_grid_strings (
                 source_session_id, source_id, grid_string,
                 string_length, b_count, p_count, b_ratio, p_ratio,
                 created_at, processed_at
@@ -353,14 +360,43 @@ def save_parsed_grid_string_to_db(grid_string, source_session_id=None, source_id
             (p_count / string_length * 100) if string_length > 0 else 0
         ))
         
+        # INSERT OR IGNORE의 경우, 중복이면 rowcount가 0이 됨
+        if cursor.rowcount == 0:
+            # 중복된 경우 기존 레코드의 id를 조회
+            cursor.execute('''
+                SELECT id FROM preprocessed_grid_strings 
+                WHERE grid_string = ?
+            ''', (grid_string,))
+            result = cursor.fetchone()
+            if result:
+                record_id = result[0]
+                # 이미 저장된 레코드이므로 ngram_chunks는 생성하지 않음
+                conn.commit()
+                return record_id
+            else:
+                # 예상치 못한 상황
+                raise Exception("중복 저장 시도했으나 기존 레코드를 찾을 수 없습니다.")
+        
         record_id = cursor.lastrowid
         conn.commit()
         
-        # ngram_chunks 생성 및 저장
+        # ngram_chunks 생성 및 저장 (새로 저장된 경우에만)
         generate_and_save_ngram_chunks(record_id, grid_string)
         
         return record_id
         
+    except sqlite3.IntegrityError as e:
+        # UNIQUE 제약 위반 (혹시 모를 경우를 대비)
+        conn.rollback()
+        # 기존 레코드 조회
+        cursor.execute('''
+            SELECT id FROM preprocessed_grid_strings 
+            WHERE grid_string = ?
+        ''', (grid_string,))
+        result = cursor.fetchone()
+        if result:
+            return result[0]
+        raise e
     except Exception as e:
         conn.rollback()
         raise e

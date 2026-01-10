@@ -6,6 +6,7 @@ SVG 파싱 모듈
 import sqlite3
 import os
 import uuid
+import time
 from datetime import datetime
 from bs4 import BeautifulSoup
 
@@ -136,7 +137,7 @@ def grid_to_string_column_wise(grid):
 
 
 def get_db_connection():
-    """데이터베이스 연결"""
+    """데이터베이스 연결 (타임아웃 설정으로 락 방지)"""
     try:
         db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), DB_PATH)
         # 디렉토리가 없으면 생성
@@ -144,7 +145,12 @@ def get_db_connection():
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
         # SQLite는 파일이 없으면 자동으로 생성하므로 존재 여부 확인 불필요
-        return sqlite3.connect(db_path)
+        # timeout=20: 락 대기 시간 20초 (기본값은 무한대기)
+        # check_same_thread=False: 멀티스레드 환경에서 사용 가능
+        conn = sqlite3.connect(db_path, timeout=20.0, check_same_thread=False)
+        # WAL 모드 활성화로 동시성 향상 (선택사항)
+        conn.execute('PRAGMA journal_mode=WAL;')
+        return conn
     except Exception as e:
         raise Exception(f"데이터베이스 연결 실패: {str(e)} (경로: {db_path})")
 
@@ -245,7 +251,7 @@ def create_ngram_chunks_table():
         conn.close()
 
 
-def generate_and_save_ngram_chunks(grid_string_id, grid_string, window_sizes=[5, 6, 7, 8, 9]):
+def generate_and_save_ngram_chunks(grid_string_id, grid_string, window_sizes=[5, 6, 7, 8, 9], conn=None):
     """
     grid_string에서 ngram_chunks를 생성하여 DB에 저장
     
@@ -253,11 +259,16 @@ def generate_and_save_ngram_chunks(grid_string_id, grid_string, window_sizes=[5,
         grid_string_id: preprocessed_grid_strings 테이블의 id
         grid_string: 처리할 grid string
         window_sizes: 생성할 윈도우 크기 리스트
+        conn: 기존 데이터베이스 연결 (None이면 새로 생성)
     
     Returns:
         dict: {window_size: chunk_count}
     """
-    conn = get_db_connection()
+    # 기존 연결이 있으면 사용, 없으면 새로 생성
+    should_close_conn = False
+    if conn is None:
+        conn = get_db_connection()
+        should_close_conn = True
     
     cursor = conn.cursor()
     result = {}
@@ -302,10 +313,12 @@ def generate_and_save_ngram_chunks(grid_string_id, grid_string, window_sizes=[5,
         conn.rollback()
         raise e
     finally:
-        conn.close()
+        # 새로 생성한 연결만 닫기
+        if should_close_conn:
+            conn.close()
 
 
-def save_parsed_grid_string_to_db(grid_string, source_session_id=None, source_id=None):
+def save_parsed_grid_string_to_db(grid_string, source_session_id=None, source_id=None, max_retries=3):
     """
     파싱된 grid_string을 preprocessed_grid_strings 테이블에 저장
     그리고 ngram_chunks도 자동으로 생성하여 저장
@@ -315,6 +328,7 @@ def save_parsed_grid_string_to_db(grid_string, source_session_id=None, source_id
         grid_string: 저장할 grid string
         source_session_id: 소스 세션 ID (None이면 고유한 값 생성)
         source_id: 소스 ID (None이면 UUID 생성)
+        max_retries: 최대 재시도 횟수 (기본값: 3)
     
     Returns:
         int: 저장된 레코드의 id (중복인 경우 기존 레코드의 id)
@@ -323,84 +337,127 @@ def save_parsed_grid_string_to_db(grid_string, source_session_id=None, source_id
     create_preprocessed_grid_strings_table()
     create_ngram_chunks_table()
     
-    conn = get_db_connection()
-    
-    cursor = conn.cursor()
-    
-    try:
-        b_count = grid_string.count('b')
-        p_count = grid_string.count('p')
-        string_length = len(grid_string)
-        
-        # source_session_id가 None이면 고유한 값 생성 (UNIQUE 제약조건 때문에)
-        if source_session_id is None:
-            # 타임스탬프와 UUID를 조합하여 고유한 값 생성
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            unique_id = str(uuid.uuid4())[:8]
-            source_session_id = f'manual_svg_parse_{timestamp}_{unique_id}'
-        
-        # source_id가 None이면 UUID 생성
-        if source_id is None:
-            source_id = str(uuid.uuid4())
-        
-        # grid_string 저장 (중복 시 무시)
-        cursor.execute('''
-            INSERT OR IGNORE INTO preprocessed_grid_strings (
-                source_session_id, source_id, grid_string,
-                string_length, b_count, p_count, b_ratio, p_ratio,
-                created_at, processed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'), datetime('now', '+9 hours'))
-        ''', (
-            source_session_id,
-            source_id,
-            grid_string,
-            string_length,
-            b_count,
-            p_count,
-            (b_count / string_length * 100) if string_length > 0 else 0,
-            (p_count / string_length * 100) if string_length > 0 else 0
-        ))
-        
-        # INSERT OR IGNORE의 경우, 중복이면 rowcount가 0이 됨
-        if cursor.rowcount == 0:
-            # 중복된 경우 기존 레코드의 id를 조회
+    # 재시도 로직
+    for attempt in range(max_retries):
+        conn = None
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            b_count = grid_string.count('b')
+            p_count = grid_string.count('p')
+            string_length = len(grid_string)
+            
+            # source_session_id가 None이면 고유한 값 생성 (UNIQUE 제약조건 때문에)
+            if source_session_id is None:
+                # 타임스탬프와 UUID를 조합하여 고유한 값 생성
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                unique_id = str(uuid.uuid4())[:8]
+                source_session_id = f'manual_svg_parse_{timestamp}_{unique_id}'
+            
+            # source_id가 None이면 UUID 생성
+            if source_id is None:
+                source_id = str(uuid.uuid4())
+            
+            # grid_string 저장 (중복 시 무시)
             cursor.execute('''
-                SELECT id FROM preprocessed_grid_strings 
-                WHERE grid_string = ?
-            ''', (grid_string,))
-            result = cursor.fetchone()
-            if result:
-                record_id = result[0]
-                # 이미 저장된 레코드이므로 ngram_chunks는 생성하지 않음
-                conn.commit()
-                return record_id
+                INSERT OR IGNORE INTO preprocessed_grid_strings (
+                    source_session_id, source_id, grid_string,
+                    string_length, b_count, p_count, b_ratio, p_ratio,
+                    created_at, processed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'), datetime('now', '+9 hours'))
+            ''', (
+                source_session_id,
+                source_id,
+                grid_string,
+                string_length,
+                b_count,
+                p_count,
+                (b_count / string_length * 100) if string_length > 0 else 0,
+                (p_count / string_length * 100) if string_length > 0 else 0
+            ))
+            
+            # INSERT OR IGNORE의 경우, 중복이면 rowcount가 0이 됨
+            if cursor.rowcount == 0:
+                # 중복된 경우 기존 레코드의 id를 조회
+                cursor.execute('''
+                    SELECT id FROM preprocessed_grid_strings 
+                    WHERE grid_string = ?
+                ''', (grid_string,))
+                result = cursor.fetchone()
+                if result:
+                    record_id = result[0]
+                    # 이미 저장된 레코드이므로 ngram_chunks는 생성하지 않음
+                    conn.commit()
+                    return record_id
+                else:
+                    # 예상치 못한 상황
+                    raise Exception("중복 저장 시도했으나 기존 레코드를 찾을 수 없습니다.")
+            
+            record_id = cursor.lastrowid
+            conn.commit()
+            
+            # ngram_chunks 생성 및 저장 (새로 저장된 경우에만)
+            # 같은 연결을 재사용하여 락 방지
+            try:
+                generate_and_save_ngram_chunks(record_id, grid_string, conn=conn)
+            except Exception as ngram_error:
+                # ngram_chunks 생성 실패해도 레코드는 저장되었으므로 경고만
+                import warnings
+                warnings.warn(f"ngram_chunks 생성 중 오류 발생 (레코드는 저장됨): {str(ngram_error)}")
+            
+            return record_id
+            
+        except sqlite3.OperationalError as e:
+            # 데이터베이스 락 오류인 경우 재시도
+            if conn:
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                try:
+                    conn.close()
+                except:
+                    pass
+            
+            if "database is locked" in str(e).lower() and attempt < max_retries - 1:
+                # 재시도 전에 짧은 대기 시간
+                wait_time = (attempt + 1) * 0.5  # 0.5초, 1초, 1.5초...
+                time.sleep(wait_time)
+                continue  # 재시도
             else:
-                # 예상치 못한 상황
-                raise Exception("중복 저장 시도했으나 기존 레코드를 찾을 수 없습니다.")
-        
-        record_id = cursor.lastrowid
-        conn.commit()
-        
-        # ngram_chunks 생성 및 저장 (새로 저장된 경우에만)
-        generate_and_save_ngram_chunks(record_id, grid_string)
-        
-        return record_id
-        
-    except sqlite3.IntegrityError as e:
-        # UNIQUE 제약 위반 (혹시 모를 경우를 대비)
-        conn.rollback()
-        # 기존 레코드 조회
-        cursor.execute('''
-            SELECT id FROM preprocessed_grid_strings 
-            WHERE grid_string = ?
-        ''', (grid_string,))
-        result = cursor.fetchone()
-        if result:
-            return result[0]
-        raise e
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
+                # 최대 재시도 횟수 초과 또는 다른 오류
+                raise e
+                
+        except sqlite3.IntegrityError as e:
+            # UNIQUE 제약 위반 (혹시 모를 경우를 대비)
+            if conn:
+                try:
+                    conn.rollback()
+                    # 기존 레코드 조회
+                    cursor.execute('''
+                        SELECT id FROM preprocessed_grid_strings 
+                        WHERE grid_string = ?
+                    ''', (grid_string,))
+                    result = cursor.fetchone()
+                    if result:
+                        return result[0]
+                except:
+                    pass
+            raise e
+            
+        except Exception as e:
+            if conn:
+                try:
+                    conn.rollback()
+                except:
+                    pass
+            raise e
+            
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
 

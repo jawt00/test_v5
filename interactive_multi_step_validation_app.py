@@ -266,6 +266,30 @@ def create_validation_tables():
             )
         ''')
         
+        # 8. 신뢰도 스킵 전략 스텝별 상세 히스토리 테이블
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS confidence_skip_validation_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                validation_id TEXT NOT NULL,
+                confidence_skip_threshold REAL NOT NULL,
+                grid_string_id INTEGER NOT NULL,
+                step INTEGER NOT NULL,
+                prefix TEXT,
+                predicted TEXT,
+                actual TEXT,
+                is_correct INTEGER,
+                confidence REAL,
+                is_forced INTEGER NOT NULL,
+                current_interval INTEGER NOT NULL,
+                has_prediction INTEGER NOT NULL,
+                validated INTEGER NOT NULL,
+                skipped INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT (datetime('now', '+9 hours')),
+                FOREIGN KEY (validation_id) REFERENCES confidence_skip_validation_sessions(validation_id),
+                FOREIGN KEY (grid_string_id) REFERENCES preprocessed_grid_strings(id)
+            )
+        ''')
+        
         # 인덱스 생성
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_confidence_skip_sessions_created_at 
@@ -305,6 +329,31 @@ def create_validation_tables():
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_confidence_skip_grid_results_first_success 
             ON confidence_skip_validation_grid_results(first_success_step)
+        ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_confidence_skip_steps_validation_id 
+            ON confidence_skip_validation_steps(validation_id)
+        ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_confidence_skip_steps_threshold 
+            ON confidence_skip_validation_steps(confidence_skip_threshold)
+        ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_confidence_skip_steps_grid_string_id 
+            ON confidence_skip_validation_steps(grid_string_id)
+        ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_confidence_skip_steps_step 
+            ON confidence_skip_validation_steps(step)
+        ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_confidence_skip_steps_validation_grid_step 
+            ON confidence_skip_validation_steps(validation_id, grid_string_id, step)
         ''')
         
         conn.commit()
@@ -551,6 +600,33 @@ def save_confidence_skip_validation_results(
                         result.get('forced_success_rate', 0.0),
                         result.get('first_success_step')
                     ))
+                    
+                    # 히스토리 저장 (첫 번째 임계값)
+                    if 'history' in result and result['history']:
+                        for entry in result['history']:
+                            cursor.execute('''
+                                INSERT INTO confidence_skip_validation_steps (
+                                    validation_id, confidence_skip_threshold, grid_string_id,
+                                    step, prefix, predicted, actual, is_correct,
+                                    confidence, is_forced, current_interval,
+                                    has_prediction, validated, skipped, created_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
+                            ''', (
+                                validation_id,
+                                confidence_skip_threshold_1,
+                                result.get('grid_string_id'),
+                                entry.get('step', 0),
+                                entry.get('prefix'),
+                                entry.get('predicted'),
+                                entry.get('actual'),
+                                1 if entry.get('is_correct') is True else (0 if entry.get('is_correct') is False else None),
+                                entry.get('confidence', 0.0),
+                                1 if entry.get('is_forced', False) else 0,
+                                entry.get('current_interval', 0),
+                                1 if entry.get('has_prediction', False) else 0,
+                                1 if entry.get('validated', False) else 0,
+                                1 if entry.get('skipped', False) else 0
+                            ))
         
         # 3. 두 번째 임계값 요약 통계 저장
         if batch_results_2 and 'summary' in batch_results_2:
@@ -614,6 +690,33 @@ def save_confidence_skip_validation_results(
                         result.get('forced_success_rate', 0.0),
                         result.get('first_success_step')
                     ))
+                    
+                    # 히스토리 저장 (두 번째 임계값)
+                    if 'history' in result and result['history']:
+                        for entry in result['history']:
+                            cursor.execute('''
+                                INSERT INTO confidence_skip_validation_steps (
+                                    validation_id, confidence_skip_threshold, grid_string_id,
+                                    step, prefix, predicted, actual, is_correct,
+                                    confidence, is_forced, current_interval,
+                                    has_prediction, validated, skipped, created_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
+                            ''', (
+                                validation_id,
+                                confidence_skip_threshold_2,
+                                result.get('grid_string_id'),
+                                entry.get('step', 0),
+                                entry.get('prefix'),
+                                entry.get('predicted'),
+                                entry.get('actual'),
+                                1 if entry.get('is_correct') is True else (0 if entry.get('is_correct') is False else None),
+                                entry.get('confidence', 0.0),
+                                1 if entry.get('is_forced', False) else 0,
+                                entry.get('current_interval', 0),
+                                1 if entry.get('has_prediction', False) else 0,
+                                1 if entry.get('validated', False) else 0,
+                                1 if entry.get('skipped', False) else 0
+                            ))
         
         conn.commit()
         return validation_id
@@ -3917,6 +4020,124 @@ def main():
                         if not show_full_history_skip_2 and len(history_skip_2) > 50:
                             st.caption(f"💡 전체 {len(history_skip_2)}개 중 최신 50개만 표시됩니다. 전체 히스토리를 보려면 위의 체크박스를 선택하세요.")
         
+        # 히스토리 저장 상태 확인 섹션 추가
+        st.markdown("---")
+        st.markdown("### 📋 히스토리 저장 상태 확인")
+        
+        # 현재 세션의 히스토리 데이터 확인
+        if batch_results_skip_1 and batch_results_skip_2:
+            col_check1, col_check2 = st.columns(2)
+            
+            with col_check1:
+                if 'results' in batch_results_skip_1 and len(batch_results_skip_1['results']) > 0:
+                    total_history_1 = sum(len(r.get('history', [])) for r in batch_results_skip_1['results'])
+                    grid_with_history_1 = sum(1 for r in batch_results_skip_1['results'] if r.get('history'))
+                    st.metric("임계값 1 - 히스토리 있는 Grid String", f"{grid_with_history_1}/{len(batch_results_skip_1['results'])}")
+                    st.metric("임계값 1 - 총 히스토리 스텝 수", f"{total_history_1}")
+                    
+                    if grid_with_history_1 < len(batch_results_skip_1['results']):
+                        st.warning(f"⚠️ {len(batch_results_skip_1['results']) - grid_with_history_1}개의 Grid String에 히스토리가 없습니다.")
+            
+            with col_check2:
+                if 'results' in batch_results_skip_2 and len(batch_results_skip_2['results']) > 0:
+                    total_history_2 = sum(len(r.get('history', [])) for r in batch_results_skip_2['results'])
+                    grid_with_history_2 = sum(1 for r in batch_results_skip_2['results'] if r.get('history'))
+                    st.metric("임계값 2 - 히스토리 있는 Grid String", f"{grid_with_history_2}/{len(batch_results_skip_2['results'])}")
+                    st.metric("임계값 2 - 총 히스토리 스텝 수", f"{total_history_2}")
+                    
+                    if grid_with_history_2 < len(batch_results_skip_2['results']):
+                        st.warning(f"⚠️ {len(batch_results_skip_2['results']) - grid_with_history_2}개의 Grid String에 히스토리가 없습니다.")
+            
+            # 저장된 validation_id 확인 기능
+            st.markdown("#### 저장된 검증 세션 확인")
+            validation_id_input = st.text_input(
+                "확인할 Validation ID 입력 (또는 전체 목록 조회)",
+                key="check_validation_id",
+                placeholder="예: f81bfed8 또는 빈칸"
+            )
+            
+            if validation_id_input:
+                # 특정 validation_id 확인
+                conn = get_db_connection()
+                if conn is not None:
+                    try:
+                        cursor = conn.cursor()
+                        # validation_id로 시작하는 세션들 찾기
+                        cursor.execute('''
+                            SELECT validation_id, created_at,
+                                   (SELECT COUNT(*) FROM confidence_skip_validation_grid_results 
+                                    WHERE validation_id = s.validation_id) as grid_count,
+                                   (SELECT COUNT(*) FROM confidence_skip_validation_steps 
+                                    WHERE validation_id = s.validation_id) as step_count
+                            FROM confidence_skip_validation_sessions s
+                            WHERE validation_id LIKE ?
+                            ORDER BY created_at DESC
+                        ''', (f"{validation_id_input}%",))
+                        
+                        matching_sessions = cursor.fetchall()
+                        
+                        if len(matching_sessions) > 0:
+                            st.markdown("##### 일치하는 세션 목록")
+                            session_info = []
+                            for row in matching_sessions:
+                                session_info.append({
+                                    'Validation ID': row[0],
+                                    '생성일': row[1],
+                                    'Grid String 수': row[2],
+                                    '저장된 스텝 수': row[3]
+                                })
+                            session_df = pd.DataFrame(session_info)
+                            st.dataframe(session_df, use_container_width=True, hide_index=True)
+                        else:
+                            st.info(f"💡 '{validation_id_input}'로 시작하는 검증 세션을 찾을 수 없습니다.")
+                    except Exception as e:
+                        st.error(f"조회 중 오류: {str(e)}")
+                    finally:
+                        conn.close()
+            else:
+                # 전체 세션 목록 조회 (최근 10개)
+                conn = get_db_connection()
+                if conn is not None:
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute('''
+                            SELECT s.validation_id, s.created_at,
+                                   (SELECT COUNT(DISTINCT grid_string_id) FROM confidence_skip_validation_grid_results 
+                                    WHERE validation_id = s.validation_id) as grid_count,
+                                   (SELECT COUNT(*) FROM confidence_skip_validation_steps 
+                                    WHERE validation_id = s.validation_id) as step_count
+                            FROM confidence_skip_validation_sessions s
+                            ORDER BY s.created_at DESC
+                            LIMIT 10
+                        ''')
+                        
+                        all_sessions = cursor.fetchall()
+                        
+                        if len(all_sessions) > 0:
+                            st.markdown("##### 최근 검증 세션 목록 (최근 10개)")
+                            session_info = []
+                            for row in all_sessions:
+                                session_info.append({
+                                    'Validation ID': row[0][:12] + '...',
+                                    '전체 ID': row[0],
+                                    '생성일': row[1],
+                                    'Grid String 수': row[2],
+                                    '저장된 스텝 수': row[3]
+                                })
+                            session_df = pd.DataFrame(session_info)
+                            st.dataframe(session_df, use_container_width=True, hide_index=True)
+                            
+                            # 스텝이 없는 세션 강조
+                            no_steps_sessions = [s for s in all_sessions if s[3] == 0]
+                            if len(no_steps_sessions) > 0:
+                                st.warning(f"⚠️ {len(no_steps_sessions)}개의 세션에 저장된 스텝이 없습니다.")
+                        else:
+                            st.info("💡 저장된 검증 세션이 없습니다.")
+                    except Exception as e:
+                        st.error(f"조회 중 오류: {str(e)}")
+                    finally:
+                        conn.close()
+        
         # 비교 테이블 (화면 가장 하단에 추가)
         if (batch_results_skip_1 is not None and len(batch_results_skip_1.get('results', [])) > 0 and
             batch_results_skip_2 is not None and len(batch_results_skip_2.get('results', [])) > 0):
@@ -3985,6 +4206,27 @@ def main():
             col_save1, col_save2 = st.columns([1, 4])
             with col_save1:
                 if st.button("💾 검증 결과 저장", type="primary", use_container_width=True, key="save_confidence_skip_results"):
+                    # 저장 전 히스토리 확인
+                    has_history_1 = False
+                    has_history_2 = False
+                    total_steps_count_1 = 0
+                    total_steps_count_2 = 0
+                    
+                    if batch_results_skip_1 and 'results' in batch_results_skip_1:
+                        for result in batch_results_skip_1['results']:
+                            if 'history' in result and result['history']:
+                                has_history_1 = True
+                                total_steps_count_1 += len(result['history'])
+                    
+                    if batch_results_skip_2 and 'results' in batch_results_skip_2:
+                        for result in batch_results_skip_2['results']:
+                            if 'history' in result and result['history']:
+                                has_history_2 = True
+                                total_steps_count_2 += len(result['history'])
+                    
+                    if not has_history_1 or not has_history_2:
+                        st.warning(f"⚠️ 히스토리 데이터 확인: 임계값1={has_history_1} ({total_steps_count_1}개), 임계값2={has_history_2} ({total_steps_count_2}개)")
+                    
                     validation_id = save_confidence_skip_validation_results(
                         cutoff_id_skip,
                         skip_window_size,
@@ -4000,14 +4242,56 @@ def main():
                     
                     if validation_id:
                         st.session_state.confidence_skip_saved_validation_id = validation_id
-                        st.success(f"✅ 검증 결과가 저장되었습니다. (ID: {validation_id[:8]}...)")
+                        
+                        # 저장 후 실제 저장된 스텝 수 확인
+                        conn = get_db_connection()
+                        if conn is not None:
+                            try:
+                                cursor = conn.cursor()
+                                cursor.execute('''
+                                    SELECT COUNT(*) as count 
+                                    FROM confidence_skip_validation_steps 
+                                    WHERE validation_id = ?
+                                ''', (validation_id,))
+                                saved_steps_count = cursor.fetchone()[0]
+                                
+                                st.success(f"✅ 검증 결과가 저장되었습니다. (ID: {validation_id[:8]}..., 저장된 스텝: {saved_steps_count}개)")
+                            except:
+                                st.success(f"✅ 검증 결과가 저장되었습니다. (ID: {validation_id[:8]}...)")
+                            finally:
+                                conn.close()
+                        else:
+                            st.success(f"✅ 검증 결과가 저장되었습니다. (ID: {validation_id[:8]}...)")
                     else:
                         st.warning("⚠️ 검증 결과 저장에 실패했습니다.")
             
             with col_save2:
                 if 'confidence_skip_saved_validation_id' in st.session_state:
                     saved_id = st.session_state.confidence_skip_saved_validation_id
-                    st.info(f"💾 마지막 저장 ID: {saved_id[:8]}...")
+                    
+                    # 저장된 스텝 수 확인
+                    conn = get_db_connection()
+                    if conn is not None:
+                        try:
+                            cursor = conn.cursor()
+                            cursor.execute('''
+                                SELECT 
+                                    COUNT(*) as total_steps,
+                                    COUNT(DISTINCT grid_string_id) as grid_strings
+                                FROM confidence_skip_validation_steps 
+                                WHERE validation_id = ?
+                            ''', (saved_id,))
+                            row = cursor.fetchone()
+                            total_steps = row[0] if row else 0
+                            grid_strings = row[1] if row else 0
+                            
+                            st.info(f"💾 마지막 저장 ID: {saved_id[:8]}... | 저장된 스텝: {total_steps}개 | Grid String: {grid_strings}개")
+                        except:
+                            st.info(f"💾 마지막 저장 ID: {saved_id[:8]}...")
+                        finally:
+                            conn.close()
+                    else:
+                        st.info(f"💾 마지막 저장 ID: {saved_id[:8]}...")
     
     # 라이브 게임 섹션 (화면에서 숨김 처리)
     # ============================================

@@ -1,3 +1,11 @@
+https://github.com/arche00/test_v5
+cd /c/
+
+git clone https://github.com/arche00/test_v5.git
+
+git pull origin master
+
+
 cd C:\test_v5
 
 python -m venv venv
@@ -27,6 +35,24 @@ streamlit run confidence_skip_hypothesis_analysis_app.py
 
 -------------------------
 copy(document.querySelector('.rf_ri').outerHTML);
+
+
+-------------------------------
+git config --global user.email "arche00@gmail.com"
+
+git config --global user.name "tj"
+
+git status
+
+git add .
+
+git commit -m "$(date +%Y%m%d_%H%M)"
+
+git push origin master
+
+
+
+
 
 
 

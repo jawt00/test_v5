@@ -1,5 +1,10 @@
+cd C:\test_v5
 
+python -m venv venv
 c:\test_v5\venv\Scripts\activate
+
+pip install -r requirements.txt
+
 
 streamlit run hypothesis_validation_app.py
 
@@ -9,6 +14,8 @@ streamlit run live_game_app.py
 
 streamlit run interactive_multi_step_validation.py 
 
+streamlit run confidence_skip_hypothesis_analysis_app.py
+
 
 
 
@@ -16,5 +23,11 @@ streamlit run interactive_multi_step_validation.py
 ./rclone.exe copy pattern_analysis_v4.db dropbox:project_db
 
 ./rclone.exe copy --include "*.db" ./ dropbox:project_db
+
+
+-------------------------
+copy(document.querySelector('.rf_ri').outerHTML);
+
+
 
 

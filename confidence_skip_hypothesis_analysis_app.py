@@ -16,9 +16,20 @@ import pandas as pd
 import sqlite3
 from collections import defaultdict
 from datetime import datetime
+import uuid
 
 # 기존 앱의 함수들 import
 from hypothesis_validation_app import get_db_connection
+
+# interactive_multi_step_validation_app에서 필요한 함수들 import
+from interactive_multi_step_validation_app import (
+    load_ngram_chunks,
+    build_frequency_model,
+    build_weighted_model,
+    predict_for_prefix,
+    predict_with_fallback_interval,
+    get_next_prefix
+)
 
 # DB 경로
 DB_PATH = 'hypothesis_validation.db'
@@ -797,6 +808,729 @@ def analyze_first_match_hypothesis(validation_id, confidence_skip_threshold):
         'cases_6_or_more_grid_ids': [r['grid_string_id'] for r in cases_6_or_more_complete + cases_6_or_more_incomplete]
     }
 
+def validate_interactive_multi_step_scenario_with_confidence_skip_first_step_analysis(
+    grid_string_id,
+    cutoff_grid_string_id,
+    window_size=7,
+    method="빈도 기반",
+    use_threshold=True,
+    threshold=60,
+    max_interval=6,
+    reverse_forced_prediction=False,
+    confidence_skip_threshold=51
+):
+    """
+    신뢰도 기반 스킵 규칙이 있는 인터랙티브 다단계 예측 시나리오 검증 (첫 스텝 스킵 분석용)
+    
+    기존 함수를 복제하여 첫 스텝 스킵 여부와 게임 종료 상태를 추적하는 독립 함수
+    
+    Args:
+        grid_string_id: 검증할 grid_string의 ID
+        cutoff_grid_string_id: 학습 데이터 기준 ID
+        window_size: 윈도우 크기
+        method: 예측 방법
+        use_threshold: 임계값 전략 사용 여부
+        threshold: 임계값
+        max_interval: 최대 예측 없음 간격
+        reverse_forced_prediction: 반대 선택 전략 사용 여부
+        confidence_skip_threshold: 스킵할 신뢰도 임계값 (기본값: 51)
+    
+    Returns:
+        dict: 검증 결과 (first_step_skipped, game_end_status, last_validation_result 포함)
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    
+    try:
+        # grid_string 로드
+        query = "SELECT grid_string FROM preprocessed_grid_strings WHERE id = ?"
+        df = pd.read_sql_query(query, conn, params=[grid_string_id])
+        
+        if len(df) == 0:
+            return None
+        
+        grid_string = df.iloc[0]['grid_string']
+        
+        if len(grid_string) < window_size:
+            return {
+                'grid_string_id': grid_string_id,
+                'max_consecutive_failures': 0,
+                'max_consecutive_matches': 0,
+                'total_steps': 0,
+                'total_failures': 0,
+                'total_predictions': 0,
+                'total_forced_predictions': 0,
+                'total_skipped_predictions': 0,
+                'forced_prediction_rate': 0.0,
+                'accuracy': 0.0,
+                'first_success_step': None,
+                'first_step_skipped': False,
+                'game_end_status': 'other',
+                'last_validation_result': None,
+                'history': []
+            }
+        
+        # 학습 데이터 구축
+        train_ids_query = "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id"
+        train_ids_df = pd.read_sql_query(train_ids_query, conn, params=[cutoff_grid_string_id])
+        train_ids = train_ids_df['id'].tolist() if len(train_ids_df) > 0 else []
+        
+        # N-gram 로드
+        train_ngrams = load_ngram_chunks(window_size=window_size, grid_string_ids=train_ids)
+        
+        if len(train_ngrams) == 0:
+            return {
+                'grid_string_id': grid_string_id,
+                'max_consecutive_failures': 0,
+                'max_consecutive_matches': 0,
+                'total_steps': 0,
+                'total_failures': 0,
+                'total_predictions': 0,
+                'total_forced_predictions': 0,
+                'total_skipped_predictions': 0,
+                'forced_prediction_rate': 0.0,
+                'accuracy': 0.0,
+                'first_success_step': None,
+                'first_step_skipped': False,
+                'game_end_status': 'other',
+                'last_validation_result': None,
+                'history': []
+            }
+        
+        # 모델 구축
+        if method == "빈도 기반":
+            model = build_frequency_model(train_ngrams)
+        elif method == "가중치 기반":
+            model = build_weighted_model(train_ngrams)
+        else:
+            model = build_frequency_model(train_ngrams)
+        
+        # 시나리오 방식으로 테스트
+        prefix_length = window_size - 1
+        history = []
+        consecutive_failures = 0
+        max_consecutive_failures = 0
+        consecutive_matches = 0
+        max_consecutive_matches = 0
+        total_steps = 0
+        total_failures = 0
+        total_predictions = 0
+        total_forced_predictions = 0
+        total_skipped_predictions = 0
+        total_forced_successes = 0
+        current_interval = 0
+        first_success_step = None  # 첫 번째 성공 스텝 추적
+        first_step_skipped = False  # 첫 번째 예측 가능한 스텝에서 스킵 여부
+        first_prediction_encountered = False  # 첫 번째 예측 가능한 스텝을 만났는지 여부
+        last_validation_result = None  # 마지막 검증 결과
+        
+        # 초기 prefix 생성
+        if len(grid_string) < prefix_length:
+            return {
+                'grid_string_id': grid_string_id,
+                'max_consecutive_failures': 0,
+                'max_consecutive_matches': 0,
+                'total_steps': 0,
+                'total_failures': 0,
+                'total_predictions': 0,
+                'total_forced_predictions': 0,
+                'total_skipped_predictions': 0,
+                'forced_prediction_rate': 0.0,
+                'accuracy': 0.0,
+                'first_success_step': None,
+                'first_step_skipped': False,
+                'game_end_status': 'other',
+                'last_validation_result': None,
+                'history': []
+            }
+        
+        current_prefix = grid_string[:prefix_length]
+        
+        # 각 스텝마다 예측
+        i = prefix_length
+        while i < len(grid_string):
+            total_steps += 1
+            actual_value = grid_string[i]
+            
+            # 예측 수행 (기본 규칙: 모든 스텝에서 예측 시도)
+            if use_threshold:
+                # 임계값 전략 사용: 임계값 이상일 때만 예측, 아니면 강제 예측
+                prediction_result = predict_with_fallback_interval(
+                    model,
+                    current_prefix,
+                    method=method,
+                    threshold=threshold,
+                    max_interval=max_interval,
+                    current_interval=current_interval
+                )
+            else:
+                # 임계값 전략 미사용: 모든 스텝에서 예측 (기본 규칙)
+                prediction_result = predict_for_prefix(model, current_prefix, method)
+                # predict_for_prefix는 항상 예측값을 반환하거나 None을 반환
+                # None인 경우도 있으므로 is_forced는 False로 설정
+                if 'is_forced' not in prediction_result:
+                    prediction_result['is_forced'] = False
+            
+            predicted_value = prediction_result.get('predicted')
+            confidence = prediction_result.get('confidence', 0.0)
+            is_forced = prediction_result.get('is_forced', False)
+            
+            # 반대 선택 전략: 강제 예측 시 반대 값 선택
+            if is_forced and reverse_forced_prediction and predicted_value is not None:
+                predicted_value = 'p' if predicted_value == 'b' else 'b'
+            
+            has_prediction = predicted_value is not None
+            
+            # 첫 번째 예측 가능한 스텝 감지 및 스킵 여부 추적
+            if has_prediction and not first_prediction_encountered:
+                first_prediction_encountered = True
+                # 신뢰도 기반 스킵 규칙 체크
+                if use_threshold and is_forced and confidence < confidence_skip_threshold:
+                    first_step_skipped = True
+            
+            # 신뢰도 기반 스킵 규칙 체크
+            should_skip = False
+            # 기본 규칙: use_threshold=False일 때는 모든 예측값에 대해 검증 수행
+            # 스킵 규칙은 use_threshold=True이고 강제 예측일 때만 적용
+            if use_threshold and has_prediction and is_forced and confidence < confidence_skip_threshold:
+                # 임계값 전략 사용 중이고, 강제 예측이고 신뢰도가 임계값 미만이면 스킵
+                should_skip = True
+                total_skipped_predictions += 1
+            
+            # 검증 수행 여부 결정 (기본 규칙: 예측값이 있으면 항상 검증)
+            is_correct = None
+            should_validate = False
+            
+            if has_prediction and not should_skip:
+                # 기본 규칙: 예측값이 있고 스킵하지 않으면 항상 검증 수행
+                should_validate = True
+                is_correct = predicted_value == actual_value
+                
+                if not is_correct:
+                    consecutive_failures += 1
+                    consecutive_matches = 0
+                    total_failures += 1
+                    if consecutive_failures > max_consecutive_failures:
+                        max_consecutive_failures = consecutive_failures
+                else:
+                    consecutive_failures = 0
+                    consecutive_matches += 1
+                    if consecutive_matches > max_consecutive_matches:
+                        max_consecutive_matches = consecutive_matches
+                    # 첫 번째 성공 스텝 기록
+                    if first_success_step is None:
+                        first_success_step = total_steps
+                
+                total_predictions += 1
+                if is_forced:
+                    total_forced_predictions += 1
+                    if is_correct:
+                        total_forced_successes += 1
+                
+                # 마지막 검증 결과 업데이트
+                last_validation_result = 'match' if is_correct else 'mismatch'
+                
+                # 검증 후 간격 리셋
+                current_interval = 0
+                
+                # 히스토리 기록
+                history.append({
+                    'step': total_steps,
+                    'prefix': current_prefix,
+                    'predicted': predicted_value,
+                    'actual': actual_value,
+                    'is_correct': is_correct,
+                    'confidence': confidence,
+                    'is_forced': is_forced,
+                    'current_interval': current_interval,
+                    'has_prediction': has_prediction,
+                    'validated': True,
+                    'skipped': False
+                })
+                
+                # 다음 스텝으로 진행
+                i += 1
+                current_prefix = get_next_prefix(current_prefix, actual_value, window_size)
+            elif has_prediction and should_skip:
+                # 스킵: 다음 스텝으로 진행하되 간격은 증가하지 않음 (멈춤)
+                # 히스토리 기록
+                history.append({
+                    'step': total_steps,
+                    'prefix': current_prefix,
+                    'predicted': predicted_value,
+                    'actual': actual_value,
+                    'is_correct': None,
+                    'confidence': confidence,
+                    'is_forced': is_forced,
+                    'current_interval': current_interval,
+                    'has_prediction': has_prediction,
+                    'validated': False,
+                    'skipped': True
+                })
+                
+                # 다음 스텝으로 진행 (간격은 증가하지 않음 - 멈춤 상태)
+                i += 1
+                current_prefix = get_next_prefix(current_prefix, actual_value, window_size)
+                # current_interval은 증가하지 않음 (멈춤)
+            else:
+                # 예측값이 없음: 간격 증가
+                history.append({
+                    'step': total_steps,
+                    'prefix': current_prefix,
+                    'predicted': None,
+                    'actual': actual_value,
+                    'is_correct': None,
+                    'confidence': confidence,
+                    'is_forced': False,
+                    'current_interval': current_interval,
+                    'has_prediction': False,
+                    'validated': False,
+                    'skipped': False
+                })
+                
+                current_interval += 1
+                # 다음 스텝으로 진행
+                i += 1
+                current_prefix = get_next_prefix(current_prefix, actual_value, window_size)
+        
+        # 정확도 계산
+        accuracy = ((total_predictions - total_failures) / total_predictions * 100) if total_predictions > 0 else 0.0
+        
+        # 강제 예측 비율 계산
+        forced_prediction_rate = (total_forced_predictions / total_predictions * 100) if total_predictions > 0 else 0.0
+        
+        # 강제 예측 성공 비율 계산
+        forced_success_rate = (total_forced_successes / total_forced_predictions * 100) if total_forced_predictions > 0 else 0.0
+        
+        # 게임 종료 상태 판단
+        if last_validation_result == 'match':
+            game_end_status = 'match_end'
+        elif max_consecutive_failures >= 6:
+            game_end_status = 'mismatch_6plus'
+        else:
+            game_end_status = 'other'
+        
+        return {
+            'grid_string_id': grid_string_id,
+            'max_consecutive_failures': max_consecutive_failures,
+            'max_consecutive_matches': max_consecutive_matches,
+            'total_steps': total_steps,
+            'total_failures': total_failures,
+            'total_predictions': total_predictions,
+            'total_forced_predictions': total_forced_predictions,
+            'total_skipped_predictions': total_skipped_predictions,
+            'forced_prediction_rate': forced_prediction_rate,
+            'forced_success_rate': forced_success_rate,
+            'accuracy': accuracy,
+            'first_success_step': first_success_step,  # 첫 번째 성공 스텝
+            'first_step_skipped': first_step_skipped,  # 첫 스텝 스킵 여부
+            'game_end_status': game_end_status,  # 게임 종료 상태
+            'last_validation_result': last_validation_result,  # 마지막 검증 결과
+            'history': history
+        }
+        
+    except Exception as e:
+        st.error(f"검증 중 오류 발생: {str(e)}")
+        return None
+    finally:
+        conn.close()
+
+def batch_validate_with_first_step_skip_analysis(
+    cutoff_grid_string_id,
+    window_size=7,
+    method="빈도 기반",
+    use_threshold=True,
+    threshold=60,
+    max_interval=6,
+    reverse_forced_prediction=False,
+    confidence_skip_threshold=51
+):
+    """
+    첫 스텝 스킵 분석을 위한 신뢰도 기반 스킵 규칙 배치 검증 (독립)
+    
+    Args:
+        cutoff_grid_string_id: 기준 grid_string ID
+        window_size: 윈도우 크기
+        method: 예측 방법
+        use_threshold: 임계값 전략 사용 여부
+        threshold: 임계값
+        max_interval: 최대 예측 없음 간격
+        reverse_forced_prediction: 반대 선택 전략 사용 여부
+        confidence_skip_threshold: 스킵할 신뢰도 임계값
+    
+    Returns:
+        dict: 배치 검증 결과 (first_step_skipped, game_end_status 포함)
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    
+    try:
+        # cutoff_grid_string_id 이후의 모든 grid_string 로드
+        query = "SELECT id FROM preprocessed_grid_strings WHERE id > ? ORDER BY id"
+        df = pd.read_sql_query(query, conn, params=[cutoff_grid_string_id])
+        
+        if len(df) == 0:
+            return {
+                'results': [],
+                'summary': {
+                    'total_grid_strings': 0,
+                    'avg_accuracy': 0.0,
+                    'max_consecutive_failures': 0,
+                    'avg_max_consecutive_failures': 0.0,
+                    'total_steps': 0,
+                    'total_failures': 0,
+                    'total_predictions': 0,
+                    'total_skipped_predictions': 0,
+                    'prediction_rate': 0.0
+                },
+                'grid_string_ids': []
+            }
+        
+        grid_string_ids = df['id'].tolist()
+        results = []
+        all_history = []  # 신뢰도 통계 수집용
+        
+        # 각 grid_string에 대해 검증 실행
+        for grid_string_id in grid_string_ids:
+            result = validate_interactive_multi_step_scenario_with_confidence_skip_first_step_analysis(
+                grid_string_id,
+                cutoff_grid_string_id,
+                window_size=window_size,
+                method=method,
+                use_threshold=use_threshold,
+                threshold=threshold,
+                max_interval=max_interval,
+                reverse_forced_prediction=reverse_forced_prediction,
+                confidence_skip_threshold=confidence_skip_threshold
+            )
+            
+            if result is not None:
+                results.append(result)
+                # 히스토리 수집 (신뢰도 통계용)
+                all_history.extend(result.get('history', []))
+        
+        # 요약 통계 계산
+        if len(results) > 0:
+            total_grid_strings = len(results)
+            avg_accuracy = sum(r['accuracy'] for r in results) / total_grid_strings
+            max_consecutive_failures = max(r['max_consecutive_failures'] for r in results)
+            avg_max_consecutive_failures = sum(r['max_consecutive_failures'] for r in results) / total_grid_strings
+            total_steps = sum(r['total_steps'] for r in results)
+            total_failures = sum(r['total_failures'] for r in results)
+            total_predictions = sum(r['total_predictions'] for r in results)
+            total_skipped_predictions = sum(r.get('total_skipped_predictions', 0) for r in results)
+            total_forced_predictions = sum(r.get('total_forced_predictions', 0) for r in results)
+            total_forced_successes = sum(r.get('total_forced_successes', 0) for r in results)
+            prediction_rate = (total_predictions / total_steps * 100) if total_steps > 0 else 0.0
+            forced_prediction_rate = (total_forced_predictions / total_predictions * 100) if total_predictions > 0 else 0.0
+            forced_success_rate = (total_forced_successes / total_forced_predictions * 100) if total_forced_predictions > 0 else 0.0
+            
+            # 첫 번째 성공 스텝 통계
+            first_success_steps = [r.get('first_success_step') for r in results if r.get('first_success_step') is not None]
+            avg_first_success_step = sum(first_success_steps) / len(first_success_steps) if len(first_success_steps) > 0 else None
+            min_first_success_step = min(first_success_steps) if len(first_success_steps) > 0 else None
+            max_first_success_step = max(first_success_steps) if len(first_success_steps) > 0 else None
+            
+            summary = {
+                'total_grid_strings': total_grid_strings,
+                'avg_accuracy': avg_accuracy,
+                'max_consecutive_failures': max_consecutive_failures,
+                'avg_max_consecutive_failures': avg_max_consecutive_failures,
+                'total_steps': total_steps,
+                'total_failures': total_failures,
+                'total_predictions': total_predictions,
+                'total_skipped_predictions': total_skipped_predictions,
+                'total_forced_predictions': total_forced_predictions,
+                'total_forced_successes': total_forced_successes,
+                'prediction_rate': prediction_rate,
+                'forced_prediction_rate': forced_prediction_rate,
+                'forced_success_rate': forced_success_rate,
+                'avg_first_success_step': avg_first_success_step,
+                'min_first_success_step': min_first_success_step,
+                'max_first_success_step': max_first_success_step,
+                'total_with_success': len(first_success_steps)  # 성공이 있었던 grid_string 수
+            }
+        else:
+            summary = {
+                'total_grid_strings': 0,
+                'avg_accuracy': 0.0,
+                'max_consecutive_failures': 0,
+                'avg_max_consecutive_failures': 0.0,
+                'total_steps': 0,
+                'total_failures': 0,
+                'total_predictions': 0,
+                'total_skipped_predictions': 0,
+                'total_forced_predictions': 0,
+                'total_forced_successes': 0,
+                'prediction_rate': 0.0,
+                'forced_prediction_rate': 0.0,
+                'forced_success_rate': 0.0
+            }
+        
+        return {
+            'results': results,
+            'summary': summary,
+            'all_history': all_history,  # 신뢰도 통계 수집용
+            'grid_string_ids': grid_string_ids  # 검증한 grid_string_id 리스트
+        }
+        
+    except Exception as e:
+        st.error(f"배치 검증 중 오류 발생: {str(e)}")
+        return None
+    finally:
+        conn.close()
+
+def save_first_step_skip_analysis_results(
+    cutoff_grid_string_id,
+    window_size,
+    method,
+    use_threshold,
+    threshold,
+    max_interval,
+    confidence_skip_threshold,
+    batch_results,
+    grid_string_ids=None
+):
+    """
+    첫 스텝 스킵 분석 결과를 DB에 저장 (독립)
+    
+    Args:
+        cutoff_grid_string_id: 기준 grid_string ID
+        window_size: 윈도우 크기
+        method: 예측 방법
+        use_threshold: 임계값 전략 사용 여부
+        threshold: 임계값
+        max_interval: 최대 예측 없음 간격
+        confidence_skip_threshold: 스킵 신뢰도 임계값
+        batch_results: 배치 검증 결과
+        grid_string_ids: 검증한 grid_string_id 리스트 (선택적)
+    
+    Returns:
+        str: validation_id (저장 성공 시), None (실패 시)
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    
+    cursor = conn.cursor()
+    
+    try:
+        # validation_id 생성 (UUID)
+        validation_id = str(uuid.uuid4())
+        
+        # 1. 검증 세션 저장
+        cursor.execute('''
+            INSERT INTO first_step_skip_analysis_sessions (
+                validation_id, cutoff_grid_string_id, window_size, method,
+                use_threshold, threshold, max_interval,
+                confidence_skip_threshold, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
+        ''', (
+            validation_id,
+            cutoff_grid_string_id,
+            window_size,
+            method,
+            use_threshold,
+            threshold if use_threshold else None,
+            max_interval,
+            confidence_skip_threshold
+        ))
+        
+        # 2. Grid String별 결과 저장
+        if batch_results and 'results' in batch_results:
+            for result in batch_results['results']:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO first_step_skip_analysis_results (
+                        validation_id, confidence_skip_threshold, grid_string_id,
+                        max_consecutive_failures, total_steps, total_failures,
+                        total_predictions, total_skipped_predictions,
+                        accuracy, forced_prediction_rate, forced_success_rate,
+                        first_success_step, first_step_skipped, game_end_status,
+                        last_validation_result, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
+                ''', (
+                    validation_id,
+                    confidence_skip_threshold,
+                    result.get('grid_string_id'),
+                    result.get('max_consecutive_failures', 0),
+                    result.get('total_steps', 0),
+                    result.get('total_failures', 0),
+                    result.get('total_predictions', 0),
+                    result.get('total_skipped_predictions', 0),
+                    result.get('accuracy', 0.0),
+                    result.get('forced_prediction_rate', 0.0),
+                    result.get('forced_success_rate', 0.0),
+                    result.get('first_success_step'),
+                    1 if result.get('first_step_skipped', False) else 0,
+                    result.get('game_end_status', 'other'),
+                    result.get('last_validation_result')
+                ))
+        
+        # 3. 예측값 테이블 스냅샷 저장 (검증 시점에 실시간 계산)
+        snapshot_threshold = threshold if use_threshold else 0.0
+        
+        try:
+            # 학습 데이터 구축
+            train_ids_query = "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id"
+            train_ids_df = pd.read_sql_query(train_ids_query, conn, params=[cutoff_grid_string_id])
+            train_ids = train_ids_df['id'].tolist() if len(train_ids_df) > 0 else []
+            
+            if len(train_ids) > 0:
+                # N-gram 로드
+                train_ngrams = load_ngram_chunks(window_size=window_size, grid_string_ids=train_ids)
+                
+                if len(train_ngrams) > 0:
+                    # 모델 구축
+                    if method == "빈도 기반":
+                        model = build_frequency_model(train_ngrams)
+                    elif method == "가중치 기반":
+                        model = build_weighted_model(train_ngrams)
+                    else:
+                        model = build_frequency_model(train_ngrams)
+                    
+                    # 학습 데이터에서 나올 수 있는 모든 prefix 추출
+                    prefixes = set()
+                    for ngram in train_ngrams:
+                        if len(ngram) >= window_size:
+                            prefix = ngram[:window_size-1]
+                            prefixes.add(prefix)
+                    
+                    # 각 prefix에 대해 예측값 계산 및 저장
+                    snapshot_count = 0
+                    for prefix in prefixes:
+                        prediction_result = predict_for_prefix(model, prefix, method)
+                        predicted_value = prediction_result.get('predicted')
+                        confidence = prediction_result.get('confidence', 0.0)
+                        ratios = prediction_result.get('ratios', {})
+                        b_ratio = ratios.get('b', 0.0) if ratios else 0.0
+                        p_ratio = ratios.get('p', 0.0) if ratios else 0.0
+                        
+                        cursor.execute('''
+                            INSERT INTO validation_session_prediction_snapshots (
+                                validation_id, window_size, prefix, predicted_value,
+                                confidence, b_ratio, p_ratio, method, threshold,
+                                snapshot_created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
+                        ''', (
+                            validation_id, window_size, prefix, predicted_value,
+                            confidence, b_ratio, p_ratio, method, snapshot_threshold
+                        ))
+                        snapshot_count += 1
+                    
+                    if snapshot_count > 0:
+                        st.info(f"예측값 스냅샷 {snapshot_count}개 저장 완료")
+        except Exception as e:
+            # 예측값 스냅샷 저장 실패해도 세션 저장은 계속 진행
+            st.warning(f"예측값 스냅샷 저장 중 오류 발생 (세션은 저장됨): {str(e)}")
+        
+        # 4. Grid String ID 리스트 저장
+        if grid_string_ids and len(grid_string_ids) > 0:
+            for order, grid_string_id in enumerate(grid_string_ids, start=1):
+                cursor.execute('''
+                    INSERT OR REPLACE INTO validation_session_grid_strings (
+                        validation_id, grid_string_id, sequence_order, created_at
+                    ) VALUES (?, ?, ?, datetime('now', '+9 hours'))
+                ''', (validation_id, grid_string_id, order))
+        
+        conn.commit()
+        return validation_id
+        
+    except Exception as e:
+        conn.rollback()
+        st.error(f"검증 결과 저장 중 오류 발생: {str(e)}")
+        import traceback
+        st.error(f"상세 오류: {traceback.format_exc()}")
+        return None
+    finally:
+        conn.close()
+
+def analyze_first_step_skip_correlation(validation_id):
+    """
+    첫 스텝 스킵과 승률의 상관관계 분석
+    
+    Args:
+        validation_id: 분석할 validation_id
+    
+    Returns:
+        dict: 분석 결과
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    
+    try:
+        # 완전한 게임만 필터링 (game_end_status IN ('match_end', 'mismatch_6plus'))
+        query = '''
+            SELECT 
+                first_step_skipped,
+                accuracy,
+                max_consecutive_failures,
+                game_end_status
+            FROM first_step_skip_analysis_results
+            WHERE validation_id = ?
+              AND game_end_status IN ('match_end', 'mismatch_6plus')
+        '''
+        df = pd.read_sql_query(query, conn, params=[validation_id])
+        
+        if len(df) == 0:
+            return {
+                'total_complete_games': 0,
+                'skip_start_count': 0,
+                'non_skip_start_count': 0,
+                'skip_start_avg_accuracy': None,
+                'non_skip_start_avg_accuracy': None,
+                'skip_start_outlier_rate': None,
+                'non_skip_start_outlier_rate': None,
+                'skip_start_outlier_count': 0,
+                'non_skip_start_outlier_count': 0
+            }
+        
+        # 스킵으로 시작한 게임과 그렇지 않은 게임 분리
+        skip_start = df[df['first_step_skipped'] == 1]
+        non_skip_start = df[df['first_step_skipped'] == 0]
+        
+        # 이상치 (불일치 6개 이상) 발생 비율
+        skip_start_outliers = skip_start[skip_start['max_consecutive_failures'] >= 6]
+        non_skip_start_outliers = non_skip_start[non_skip_start['max_consecutive_failures'] >= 6]
+        
+        # 통계 계산
+        total_complete_games = len(df)
+        skip_start_count = len(skip_start)
+        non_skip_start_count = len(non_skip_start)
+        
+        skip_start_avg_accuracy = skip_start['accuracy'].mean() if len(skip_start) > 0 else None
+        non_skip_start_avg_accuracy = non_skip_start['accuracy'].mean() if len(non_skip_start) > 0 else None
+        
+        skip_start_outlier_count = len(skip_start_outliers)
+        non_skip_start_outlier_count = len(non_skip_start_outliers)
+        
+        skip_start_outlier_rate = (skip_start_outlier_count / skip_start_count * 100) if skip_start_count > 0 else None
+        non_skip_start_outlier_rate = (non_skip_start_outlier_count / non_skip_start_count * 100) if non_skip_start_count > 0 else None
+        
+        return {
+            'total_complete_games': total_complete_games,
+            'skip_start_count': skip_start_count,
+            'non_skip_start_count': non_skip_start_count,
+            'skip_start_avg_accuracy': skip_start_avg_accuracy,
+            'non_skip_start_avg_accuracy': non_skip_start_avg_accuracy,
+            'skip_start_outlier_rate': skip_start_outlier_rate,
+            'non_skip_start_outlier_rate': non_skip_start_outlier_rate,
+            'skip_start_outlier_count': skip_start_outlier_count,
+            'non_skip_start_outlier_count': non_skip_start_outlier_count,
+            'skip_start_df': skip_start,
+            'non_skip_start_df': non_skip_start
+        }
+        
+    except Exception as e:
+        st.error(f"분석 중 오류 발생: {str(e)}")
+        import traceback
+        st.error(f"상세 오류: {traceback.format_exc()}")
+        return None
+    finally:
+        conn.close()
+
 def main():
     st.title("📊 신뢰도 스킵 전략 가설 검증 분석")
     st.markdown("""
@@ -1359,6 +2093,200 @@ def main():
                 
                 history_df = pd.DataFrame(history_data)
                 st.dataframe(history_df, use_container_width=True, hide_index=True)
+    
+    # 첫 스텝 스킵 분석 섹션
+    st.markdown("---")
+    st.markdown("## 첫 스텝 스킵 분석")
+    st.markdown("첫 번째 예측 가능한 스텝에서 스킵으로 시작한 게임과 그렇지 않은 게임의 승률 상관관계 분석")
+    
+    with st.form("first_step_skip_analysis_form", clear_on_submit=False):
+        st.markdown("### 설정")
+        
+        col_skip1, col_skip2, col_skip3 = st.columns(3)
+        
+        with col_skip1:
+            skip_window_size = st.selectbox(
+                "윈도우 크기",
+                options=[5, 6, 7, 8, 9],
+                index=2,
+                key="skip_analysis_window_size",
+                help="예측에 사용할 윈도우 크기를 선택하세요"
+            )
+            skip_method = st.selectbox(
+                "예측 방법",
+                options=["빈도 기반", "가중치 기반"],
+                index=0,
+                key="skip_analysis_method",
+                help="예측 방법을 선택하세요"
+            )
+        
+        with col_skip2:
+            skip_use_threshold = st.checkbox(
+                "임계값 전략 사용",
+                value=True,
+                key="skip_analysis_use_threshold",
+                help="임계값 전략 사용 여부"
+            )
+            skip_threshold_val = st.number_input(
+                "임계값",
+                min_value=0,
+                max_value=100,
+                value=56,
+                step=1,
+                key="skip_analysis_threshold",
+                help="신뢰도 임계값 (%)",
+                disabled=not skip_use_threshold
+            )
+            skip_max_interval = st.number_input(
+                "최대 예측 없음 간격",
+                min_value=1,
+                max_value=20,
+                value=6,
+                step=1,
+                key="skip_analysis_max_interval",
+                help="최대 예측 없음 간격"
+            )
+        
+        with col_skip3:
+            skip_confidence_threshold = st.number_input(
+                "스킵 신뢰도 임계값",
+                min_value=0.0,
+                max_value=100.0,
+                value=51.0,
+                step=0.5,
+                key="skip_analysis_confidence_threshold",
+                help="이 값 미만의 신뢰도는 스킵됩니다"
+            )
+            
+            # cutoff_grid_string_id 선택
+            cutoff_query_skip = "SELECT id, created_at FROM preprocessed_grid_strings ORDER BY id"
+            cutoff_df_skip = pd.read_sql_query(cutoff_query_skip, get_db_connection())
+            cutoff_options_skip = [(None, "전체 데이터")]
+            for _, row in cutoff_df_skip.iterrows():
+                cutoff_options_skip.append((row['id'], row['created_at']))
+            
+            cutoff_id_skip = st.selectbox(
+                "학습 데이터 기준 (Cutoff Grid String ID)",
+                options=[opt[0] for opt in cutoff_options_skip],
+                format_func=lambda x: "전체 데이터" if x is None else next((f"ID {opt[0]} - {opt[1]}" for opt in cutoff_options_skip if opt[0] == x), f"ID {x} 이후"),
+                key="skip_analysis_cutoff_id",
+                help="이 ID 이하의 데이터를 학습 데이터로 사용합니다"
+            )
+        
+        submitted_skip = st.form_submit_button("첫 스텝 스킵 분석 실행", type="primary")
+        
+        if submitted_skip:
+            if cutoff_id_skip is None:
+                st.error("학습 데이터 기준을 선택해주세요.")
+            else:
+                with st.spinner("검증 실행 중..."):
+                    try:
+                        # 배치 검증 실행
+                        batch_results_skip = batch_validate_with_first_step_skip_analysis(
+                            cutoff_id_skip,
+                            window_size=skip_window_size,
+                            method=skip_method,
+                            use_threshold=skip_use_threshold,
+                            threshold=skip_threshold_val if skip_use_threshold else 60,
+                            max_interval=skip_max_interval,
+                            reverse_forced_prediction=False,
+                            confidence_skip_threshold=skip_confidence_threshold
+                        )
+                        
+                        if batch_results_skip and len(batch_results_skip.get('results', [])) > 0:
+                            # 결과 저장
+                            validation_id_skip = save_first_step_skip_analysis_results(
+                                cutoff_id_skip,
+                                skip_window_size,
+                                skip_method,
+                                skip_use_threshold,
+                                skip_threshold_val if skip_use_threshold else None,
+                                skip_max_interval,
+                                skip_confidence_threshold,
+                                batch_results_skip,
+                                grid_string_ids=batch_results_skip.get('grid_string_ids')
+                            )
+                            
+                            if validation_id_skip:
+                                st.session_state.first_step_skip_analysis_validation_id = validation_id_skip
+                                st.success(f"✅ 분석 결과가 저장되었습니다. (ID: {validation_id_skip[:8]}...)")
+                                
+                                # 분석 실행
+                                analysis_result = analyze_first_step_skip_correlation(validation_id_skip)
+                                
+                                if analysis_result:
+                                    st.markdown("### 분석 결과")
+                                    
+                                    # 요약 통계
+                                    col_summary1, col_summary2 = st.columns(2)
+                                    
+                                    with col_summary1:
+                                        st.markdown("#### 스킵으로 시작한 게임")
+                                        st.metric("게임 수", analysis_result['skip_start_count'])
+                                        if analysis_result['skip_start_avg_accuracy'] is not None:
+                                            st.metric("평균 승률", f"{analysis_result['skip_start_avg_accuracy']:.2f}%")
+                                        if analysis_result['skip_start_outlier_rate'] is not None:
+                                            st.metric("이상치 발생 비율", f"{analysis_result['skip_start_outlier_rate']:.2f}%")
+                                            st.caption(f"이상치 발생: {analysis_result['skip_start_outlier_count']}개")
+                                    
+                                    with col_summary2:
+                                        st.markdown("#### 스킵 없이 시작한 게임")
+                                        st.metric("게임 수", analysis_result['non_skip_start_count'])
+                                        if analysis_result['non_skip_start_avg_accuracy'] is not None:
+                                            st.metric("평균 승률", f"{analysis_result['non_skip_start_avg_accuracy']:.2f}%")
+                                        if analysis_result['non_skip_start_outlier_rate'] is not None:
+                                            st.metric("이상치 발생 비율", f"{analysis_result['non_skip_start_outlier_rate']:.2f}%")
+                                            st.caption(f"이상치 발생: {analysis_result['non_skip_start_outlier_count']}개")
+                                    
+                                    # 비교 차트
+                                    if analysis_result['skip_start_avg_accuracy'] is not None and analysis_result['non_skip_start_avg_accuracy'] is not None:
+                                        st.markdown("#### 승률 비교")
+                                        comparison_data = {
+                                            '시작 유형': ['스킵으로 시작', '스킵 없이 시작'],
+                                            '평균 승률': [
+                                                analysis_result['skip_start_avg_accuracy'],
+                                                analysis_result['non_skip_start_avg_accuracy']
+                                            ]
+                                        }
+                                        comparison_df = pd.DataFrame(comparison_data)
+                                        st.bar_chart(comparison_df.set_index('시작 유형'))
+                                        
+                                        # 차이 계산
+                                        accuracy_diff = analysis_result['non_skip_start_avg_accuracy'] - analysis_result['skip_start_avg_accuracy']
+                                        st.info(f"승률 차이: {accuracy_diff:+.2f}% (스킵 없이 시작한 게임이 {'높음' if accuracy_diff > 0 else '낮음'})")
+                                    
+                                    # 이상치 발생 비율 비교
+                                    if analysis_result['skip_start_outlier_rate'] is not None and analysis_result['non_skip_start_outlier_rate'] is not None:
+                                        st.markdown("#### 이상치 발생 비율 비교")
+                                        outlier_data = {
+                                            '시작 유형': ['스킵으로 시작', '스킵 없이 시작'],
+                                            '이상치 발생 비율': [
+                                                analysis_result['skip_start_outlier_rate'],
+                                                analysis_result['non_skip_start_outlier_rate']
+                                            ]
+                                        }
+                                        outlier_df = pd.DataFrame(outlier_data)
+                                        st.bar_chart(outlier_df.set_index('시작 유형'))
+                                        
+                                        # 차이 계산
+                                        outlier_diff = analysis_result['skip_start_outlier_rate'] - analysis_result['non_skip_start_outlier_rate']
+                                        st.info(f"이상치 발생 비율 차이: {outlier_diff:+.2f}% (스킵으로 시작한 게임이 {'높음' if outlier_diff > 0 else '낮음'})")
+                                    
+                                    # 상세 데이터
+                                    st.markdown("#### 상세 데이터")
+                                    if 'skip_start_df' in analysis_result and len(analysis_result['skip_start_df']) > 0:
+                                        st.markdown("**스킵으로 시작한 게임**")
+                                        st.dataframe(analysis_result['skip_start_df'], use_container_width=True)
+                                    
+                                    if 'non_skip_start_df' in analysis_result and len(analysis_result['non_skip_start_df']) > 0:
+                                        st.markdown("**스킵 없이 시작한 게임**")
+                                        st.dataframe(analysis_result['non_skip_start_df'], use_container_width=True)
+                        else:
+                            st.error("검증 실행 실패 또는 결과가 없습니다.")
+                    except Exception as e:
+                        st.error(f"분석 실행 중 오류 발생: {str(e)}")
+                        import traceback
+                        st.error(f"상세 오류: {traceback.format_exc()}")
 
 if __name__ == "__main__":
     main()

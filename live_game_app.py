@@ -17,6 +17,7 @@ import pandas as pd
 # 기존 앱의 함수들 import
 from hypothesis_validation_app import (
     get_db_connection,
+    load_preprocessed_data,
     load_ngram_chunks,
     build_frequency_model,
     build_weighted_model,
@@ -949,9 +950,111 @@ def main():
     if 'live_game_settings' not in st.session_state:
         st.session_state.live_game_settings = None
     
+    # 시뮬레이션 세션 불러오기 기능
+    from optimal_threshold_finder_app import load_simulation_sessions, load_simulation_session
+    
+    st.markdown("---")
+    st.markdown("### 📥 시뮬레이션 세션 불러오기 (권장)")
+    
+    col_refresh1, col_refresh2 = st.columns([3, 1])
+    with col_refresh1:
+        st.markdown("시뮬레이션에서 저장한 결과를 불러와 자동으로 설정을 적용합니다.")
+    with col_refresh2:
+        if st.button("🔄 새로고침", use_container_width=True, key="refresh_simulation_sessions"):
+            # 세션 상태 초기화하여 새로고침
+            if 'live_game_simulation_session_select' in st.session_state:
+                del st.session_state.live_game_simulation_session_select
+            st.rerun()
+    
+    # 저장된 시뮬레이션 세션 목록 로드
+    simulation_sessions_df = load_simulation_sessions()
+    
+    if len(simulation_sessions_df) > 0:
+        # 세션 선택
+        session_options = []
+        for _, row in simulation_sessions_df.iterrows():
+            optimal_info = ""
+            if pd.notna(row.get('optimal_threshold')):
+                optimal_info = f" | 최적: {row['optimal_threshold']:.1f}%"
+            display_text = f"ID {row['validation_id'][:8]}... | Cutoff: {row['cutoff_grid_string_id']} | {row['window_size']}윈도우 | {row['method']}{optimal_info} | {row['created_at']}"
+            session_options.append((row['validation_id'], display_text))
+        
+        selected_session_id = st.selectbox(
+            "시뮬레이션 세션 선택",
+            options=[None] + [opt[0] for opt in session_options],
+            format_func=lambda x: "선택 안 함" if x is None else next((opt[1] for opt in session_options if opt[0] == x), x),
+            key="live_game_simulation_session_select",
+            help="시뮬레이션에서 저장한 세션을 선택하면 모든 설정이 자동으로 적용됩니다."
+        )
+        
+        if selected_session_id:
+            session_info = load_simulation_session(selected_session_id)
+            if session_info:
+                st.success(f"✅ 시뮬레이션 세션 불러오기 성공!")
+                
+                col_info1, col_info2 = st.columns(2)
+                with col_info1:
+                    st.markdown(f"""
+                    **학습 데이터 설정:**
+                    - 기준 ID: {session_info['cutoff_grid_string_id']}
+                    - 윈도우 크기: {session_info['window_size']}
+                    - 예측 방법: {session_info['method']}
+                    """)
+                with col_info2:
+                    st.markdown(f"""
+                    **예측 전략 설정:**
+                    - 임계값 전략: {'사용' if session_info['use_threshold'] else '미사용'}
+                    - 임계값: {session_info.get('threshold', 'N/A')}
+                    - 최대 간격: {session_info['max_interval']}
+                    - 최적 스킵 임계값: {session_info.get('optimal_confidence_skip_threshold', 'N/A'):.1f}%
+                    """)
+                
+                # 불러오기 버튼
+                if st.button("⚙️ 이 설정으로 게임 설정 적용", type="primary", use_container_width=True):
+                    st.session_state.live_game_settings = {
+                        'window_size': session_info['window_size'],
+                        'method': session_info['method'],
+                        'use_threshold': bool(session_info['use_threshold']),
+                        'threshold': session_info.get('threshold') if session_info.get('use_threshold') else None,
+                        'max_interval': session_info['max_interval'],
+                        'confidence_skip_threshold': session_info.get('optimal_confidence_skip_threshold', 51.5),
+                        'cutoff_id': session_info['cutoff_grid_string_id']
+                    }
+                    st.session_state.live_game_cutoff_id = session_info['cutoff_grid_string_id']
+                    st.session_state.live_game_simulation_validation_id = selected_session_id
+                    st.success("✅ 게임 설정이 적용되었습니다!")
+                    st.rerun()
+    else:
+        st.info("💡 저장된 시뮬레이션 세션이 없습니다. 먼저 시뮬레이션을 실행하고 결과를 저장하세요.")
+    
     # 게임 설정
-    with st.expander("⚙️ 게임 설정", expanded=True):
+    with st.expander("⚙️ 게임 설정 (수동 설정)", expanded=False):
         st.markdown("### 설정값")
+        st.caption("💡 시뮬레이션 세션을 불러오면 이 설정은 자동으로 채워집니다.")
+        
+        # 시뮬레이션 세션에서 불러온 설정이 있으면 기본값으로 사용
+        if st.session_state.live_game_settings and 'cutoff_id' in st.session_state.live_game_settings:
+            default_window_size = st.session_state.live_game_settings['window_size']
+            default_method = st.session_state.live_game_settings['method']
+            default_use_threshold = st.session_state.live_game_settings['use_threshold']
+            default_threshold = st.session_state.live_game_settings.get('threshold', 56)
+            default_max_interval = st.session_state.live_game_settings['max_interval']
+            default_confidence_skip_threshold = st.session_state.live_game_settings.get('confidence_skip_threshold', 51.5)
+            
+            # 인덱스 계산
+            window_size_options = [5, 6, 7, 8, 9]
+            method_options = ["빈도 기반", "가중치 기반", "안전 우선"]
+            window_size_index = window_size_options.index(default_window_size) if default_window_size in window_size_options else 0
+            method_index = method_options.index(default_method) if default_method in method_options else 0
+        else:
+            default_window_size = 7
+            default_method = "빈도 기반"
+            default_use_threshold = True
+            default_threshold = 56
+            default_max_interval = 4
+            default_confidence_skip_threshold = 51.5
+            window_size_index = 2  # 7의 인덱스
+            method_index = 0
         
         col_game1, col_game2 = st.columns(2)
         
@@ -959,21 +1062,21 @@ def main():
             live_window_size = st.selectbox(
                 "윈도우 크기",
                 options=[5, 6, 7, 8, 9],
-                index=0,
+                index=window_size_index,
                 key="live_game_window_size"
             )
             
             live_method = st.selectbox(
                 "예측 방법",
                 options=["빈도 기반", "가중치 기반", "안전 우선"],
-                index=0,
+                index=method_index,
                 key="live_game_method"
             )
         
         with col_game2:
             live_use_threshold = st.checkbox(
                 "임계값 전략 사용",
-                value=True,
+                value=default_use_threshold,
                 key="live_game_use_threshold"
             )
             
@@ -981,7 +1084,7 @@ def main():
                 "임계값 (%)",
                 min_value=0,
                 max_value=100,
-                value=56,
+                value=int(default_threshold) if default_threshold else 56,
                 step=1,
                 key="live_game_threshold",
                 disabled=not live_use_threshold
@@ -991,7 +1094,7 @@ def main():
                 "최대 간격",
                 min_value=1,
                 max_value=20,
-                value=4,
+                value=default_max_interval,
                 step=1,
                 key="live_game_max_interval"
             )
@@ -1000,11 +1103,62 @@ def main():
                 "신뢰도 스킵 임계값 (%)",
                 min_value=0.0,
                 max_value=100.0,
-                value=51.5,
+                value=default_confidence_skip_threshold,
                 step=0.1,
                 key="live_game_confidence_skip_threshold",
                 help="임계값 미만일 때만 스킵합니다. 예: 50.9를 설정하면 50.9 미만만 스킵하고, 50.9 이상은 게임을 실행합니다. (0.1 단위로 설정 가능: 50.9, 51.9, 52.9...)"
             )
+        
+        # 기준 Grid String ID 선택 (학습 데이터 범위 지정)
+        st.markdown("---")
+        st.markdown("### 학습 데이터 범위 설정")
+        df_all_strings = load_preprocessed_data()
+        if len(df_all_strings) > 0:
+            grid_string_options = []
+            for _, row in df_all_strings.iterrows():
+                grid_string_options.append((row['id'], row['created_at']))
+            
+            grid_string_options.sort(key=lambda x: x[0], reverse=True)
+            
+            # 시뮬레이션 세션에서 불러온 cutoff_id가 있으면 기본값으로 사용
+            current_cutoff = st.session_state.get('live_game_cutoff_id', None)
+            if current_cutoff is None and st.session_state.live_game_settings and 'cutoff_id' in st.session_state.live_game_settings:
+                current_cutoff = st.session_state.live_game_settings['cutoff_id']
+            
+            default_index = 0
+            if current_cutoff is not None:
+                option_ids = [None] + [opt[0] for opt in grid_string_options]
+                if current_cutoff in option_ids:
+                    default_index = option_ids.index(current_cutoff)
+            
+            live_cutoff_id = st.selectbox(
+                "기준 Grid String ID (이 ID 이하를 학습 데이터로 사용)",
+                options=[None] + [opt[0] for opt in grid_string_options],
+                format_func=lambda x: "전체 데이터" if x is None else next((f"ID {opt[0]} - {opt[1]}" for opt in grid_string_options if opt[0] == x), f"ID {x} 이하"),
+                index=default_index,
+                key="live_game_cutoff_id_select",
+                help="시뮬레이션과 동일한 학습 데이터를 사용하려면 동일한 cutoff_id를 선택하세요."
+            )
+            
+            if live_cutoff_id is not None:
+                selected_info = df_all_strings[df_all_strings['id'] == live_cutoff_id].iloc[0]
+                st.info(f"선택된 기준: ID {live_cutoff_id} (길이: {selected_info['string_length']}, 생성일: {selected_info['created_at']})")
+                
+                # 이후 데이터 개수 확인
+                conn = get_db_connection()
+                if conn is not None:
+                    try:
+                        count_query = "SELECT COUNT(*) as count FROM preprocessed_grid_strings WHERE id > ?"
+                        count_df = pd.read_sql_query(count_query, conn, params=[live_cutoff_id])
+                        after_count = count_df.iloc[0]['count']
+                        st.caption(f"검증 대상: {after_count}개의 grid_string (이 ID 이후)")
+                    except:
+                        pass
+                    finally:
+                        conn.close()
+        else:
+            live_cutoff_id = None
+            st.warning("⚠️ 저장된 grid_string이 없습니다.")
         
         # 설정 저장 버튼
         col_save1, col_save2 = st.columns([1, 4])
@@ -1016,8 +1170,10 @@ def main():
                         'use_threshold': live_use_threshold,
                         'threshold': live_threshold,
                         'max_interval': live_max_interval,
-                        'confidence_skip_threshold': live_confidence_skip_threshold
+                        'confidence_skip_threshold': live_confidence_skip_threshold,
+                        'cutoff_id': live_cutoff_id
                     }
+                    st.session_state.live_game_cutoff_id = live_cutoff_id
                     st.rerun()
         
         with col_save2:
@@ -1031,7 +1187,7 @@ def main():
         value="",
         height=80,
         key="live_game_grid_string",
-        help="라이브 게임에서 사용할 grid_string을 입력하세요. 기존 데이터는 모두 학습 데이터로 사용됩니다.",
+        help="라이브 게임에서 사용할 grid_string을 입력하세요. 이 grid_string이 DB에 있으면 학습 데이터에서 자동으로 제외됩니다.",
         disabled=st.session_state.live_game_settings is None
     )
     
@@ -1063,16 +1219,48 @@ def main():
                         st.error("데이터베이스 연결 실패")
                     else:
                         try:
-                                # 모든 기존 데이터를 학습 데이터로 사용 (캐싱 확인)
-                                model_cache_key = f"live_game_model_{settings['window_size']}_{settings['method']}"
+                                # 입력한 grid_string이 DB에 있는지 확인
+                                check_query = "SELECT id FROM preprocessed_grid_strings WHERE grid_string = ?"
+                                check_df = pd.read_sql_query(check_query, conn, params=[grid_string])
+                                existing_grid_string_id = check_df.iloc[0]['id'] if len(check_df) > 0 else None
+                                
+                                # cutoff_id 가져오기
+                                cutoff_id = settings.get('cutoff_id')
+                                
+                                # 모델 캐싱 키 생성 (cutoff_id 포함)
+                                if cutoff_id is not None:
+                                    model_cache_key = f"live_game_model_{settings['window_size']}_{settings['method']}_cutoff_{cutoff_id}"
+                                else:
+                                    model_cache_key = f"live_game_model_{settings['window_size']}_{settings['method']}_all"
+                                
+                                # 입력한 grid_string이 DB에 있으면 캐시 키에 포함
+                                if existing_grid_string_id is not None:
+                                    model_cache_key += f"_exclude_{existing_grid_string_id}"
                                 
                                 if model_cache_key in st.session_state:
                                     # 캐시된 모델 재사용
                                     model = st.session_state[model_cache_key]
                                 else:
-                                    # 모델 구축
-                                    train_ids_query = "SELECT id FROM preprocessed_grid_strings ORDER BY id"
-                                    train_ids_df = pd.read_sql_query(train_ids_query, conn)
+                                    # 학습 데이터 구축
+                                    if cutoff_id is not None:
+                                        # cutoff_id 이하의 데이터만 사용
+                                        if existing_grid_string_id is not None and existing_grid_string_id <= cutoff_id:
+                                            # 입력한 grid_string이 cutoff_id 이하에 있으면 학습 데이터에서 제외
+                                            train_ids_query = "SELECT id FROM preprocessed_grid_strings WHERE id <= ? AND id < ? ORDER BY id"
+                                            train_ids_df = pd.read_sql_query(train_ids_query, conn, params=[cutoff_id, existing_grid_string_id])
+                                        else:
+                                            # 입력한 grid_string이 cutoff_id 초과에 있거나 없으면 cutoff_id 이하만 사용
+                                            train_ids_query = "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id"
+                                            train_ids_df = pd.read_sql_query(train_ids_query, conn, params=[cutoff_id])
+                                    else:
+                                        # cutoff_id가 없으면 모든 데이터 사용 (입력한 grid_string 제외)
+                                        if existing_grid_string_id is not None:
+                                            train_ids_query = "SELECT id FROM preprocessed_grid_strings WHERE id < ? ORDER BY id"
+                                            train_ids_df = pd.read_sql_query(train_ids_query, conn, params=[existing_grid_string_id])
+                                        else:
+                                            train_ids_query = "SELECT id FROM preprocessed_grid_strings ORDER BY id"
+                                            train_ids_df = pd.read_sql_query(train_ids_query, conn)
+                                    
                                     train_ids = train_ids_df['id'].tolist() if len(train_ids_df) > 0 else []
                                     
                                     # N-gram 로드
@@ -1092,6 +1280,10 @@ def main():
                                     
                                     # 모델 캐싱
                                     st.session_state[model_cache_key] = model
+                                
+                                # 입력한 grid_string이 DB에 있는 경우 경고
+                                if existing_grid_string_id is not None:
+                                    st.info(f"💡 입력한 grid_string이 DB에 있습니다 (ID: {existing_grid_string_id}). 학습 데이터에서 제외되었습니다.")
                                 
                                 # 게임 상태 초기화
                                 prefix_length = settings['window_size'] - 1

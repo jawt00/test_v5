@@ -7,7 +7,7 @@ import streamlit as st
 
 # 페이지 설정 (모든 import 전에 실행되어야 함)
 st.set_page_config(
-    page_title="Confidence Skip Hypothesis Analysis",
+    page_title="confidence_skip_hypothesis_analysis_app",
     page_icon="📊",
     layout="wide"
 )
@@ -1446,9 +1446,237 @@ def save_first_step_skip_analysis_results(
     finally:
         conn.close()
 
+def analyze_first_step_skip_correlation_from_validation(validation_id, confidence_skip_threshold):
+    """
+    기존 검증 데이터에서 첫 스텝 스킵과 승률의 상관관계 분석
+    (confidence_skip_validation_steps와 confidence_skip_validation_grid_results 사용)
+    
+    Args:
+        validation_id: 분석할 validation_id
+        confidence_skip_threshold: 신뢰도 스킵 임계값
+    
+    Returns:
+        dict: 분석 결과
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    
+    try:
+        # 1. 각 grid_string_id별로 첫 번째 예측 가능한 스텝(has_prediction=1)에서 skipped=1인지 확인
+        #    그리고 첫 번째 실제 검증된 예측 스텝(has_prediction=1 AND skipped=0 AND validated=1)에서 is_correct 확인
+        first_step_query = '''
+            WITH first_prediction_steps AS (
+                SELECT 
+                    grid_string_id,
+                    MIN(CASE WHEN has_prediction = 1 THEN step END) as first_prediction_step
+                FROM confidence_skip_validation_steps
+                WHERE validation_id = ? AND confidence_skip_threshold = ?
+                GROUP BY grid_string_id
+            ),
+            first_validated_steps AS (
+                SELECT 
+                    grid_string_id,
+                    MIN(CASE WHEN has_prediction = 1 AND skipped = 0 AND validated = 1 THEN step END) as first_validated_step
+                FROM confidence_skip_validation_steps
+                WHERE validation_id = ? AND confidence_skip_threshold = ?
+                GROUP BY grid_string_id
+            )
+            SELECT 
+                s.grid_string_id,
+                CASE WHEN s.skipped = 1 THEN 1 ELSE 0 END as first_step_skipped,
+                CASE 
+                    WHEN v.first_validated_step IS NOT NULL THEN
+                        (SELECT CASE WHEN is_correct = 1 THEN 1 ELSE 0 END
+                         FROM confidence_skip_validation_steps
+                         WHERE validation_id = ? AND confidence_skip_threshold = ?
+                           AND grid_string_id = s.grid_string_id
+                           AND step = v.first_validated_step)
+                    WHEN s.is_correct IS NOT NULL THEN
+                        CASE WHEN s.is_correct = 1 THEN 1 ELSE 0 END
+                    ELSE 0
+                END as first_prediction_match
+            FROM confidence_skip_validation_steps s
+            INNER JOIN first_prediction_steps f ON 
+                s.grid_string_id = f.grid_string_id AND 
+                s.step = f.first_prediction_step
+            LEFT JOIN first_validated_steps v ON
+                s.grid_string_id = v.grid_string_id
+            WHERE s.validation_id = ? AND s.confidence_skip_threshold = ?
+        '''
+        first_step_df = pd.read_sql_query(
+            first_step_query, 
+            conn, 
+            params=[validation_id, confidence_skip_threshold, validation_id, confidence_skip_threshold, validation_id, confidence_skip_threshold, validation_id, confidence_skip_threshold]
+        )
+        
+        if len(first_step_df) == 0:
+            return {
+                'total_complete_games': 0,
+                'skip_start_count': 0,
+                'non_skip_start_count': 0,
+                'skip_start_avg_accuracy': None,
+                'non_skip_start_avg_accuracy': None,
+                'skip_start_outlier_rate': None,
+                'non_skip_start_outlier_rate': None,
+                'skip_start_outlier_count': 0,
+                'non_skip_start_outlier_count': 0,
+                'skip_start_first_match_count': 0,
+                'skip_start_first_mismatch_count': 0,
+                'non_skip_start_first_match_count': 0,
+                'non_skip_start_first_mismatch_count': 0,
+                'skip_start_first_match_avg_accuracy': None,
+                'skip_start_first_mismatch_avg_accuracy': None,
+                'non_skip_start_first_match_avg_accuracy': None,
+                'non_skip_start_first_mismatch_avg_accuracy': None
+            }
+        
+        # 2. Grid String별 결과와 조인
+        # 완전한 게임만 필터링 (max_consecutive_failures >= 6 또는 정상 종료)
+        grid_results_query = '''
+            SELECT 
+                grid_string_id,
+                accuracy,
+                max_consecutive_failures
+            FROM confidence_skip_validation_grid_results
+            WHERE validation_id = ? AND confidence_skip_threshold = ?
+        '''
+        grid_results_df = pd.read_sql_query(
+            grid_results_query, 
+            conn, 
+            params=[validation_id, confidence_skip_threshold]
+        )
+        
+        if len(grid_results_df) == 0:
+            return {
+                'total_complete_games': 0,
+                'skip_start_count': 0,
+                'non_skip_start_count': 0,
+                'skip_start_avg_accuracy': None,
+                'non_skip_start_avg_accuracy': None,
+                'skip_start_outlier_rate': None,
+                'non_skip_start_outlier_rate': None,
+                'skip_start_outlier_count': 0,
+                'non_skip_start_outlier_count': 0,
+                'skip_start_first_match_count': 0,
+                'skip_start_first_mismatch_count': 0,
+                'non_skip_start_first_match_count': 0,
+                'non_skip_start_first_mismatch_count': 0,
+                'skip_start_first_match_avg_accuracy': None,
+                'skip_start_first_mismatch_avg_accuracy': None,
+                'non_skip_start_first_match_avg_accuracy': None,
+                'non_skip_start_first_mismatch_avg_accuracy': None
+            }
+        
+        # 3. 조인하여 분석 데이터 생성
+        df = first_step_df.merge(grid_results_df, on='grid_string_id', how='inner')
+        
+        # 완전한 게임만 필터링 (max_consecutive_failures >= 6 또는 정상 종료)
+        # max_consecutive_failures >= 6이면 mismatch_6plus, 그 외는 match_end로 간주
+        df['game_end_status'] = df['max_consecutive_failures'].apply(
+            lambda x: 'mismatch_6plus' if x >= 6 else 'match_end'
+        )
+        df = df[df['game_end_status'].isin(['match_end', 'mismatch_6plus'])]
+        
+        if len(df) == 0:
+            return {
+                'total_complete_games': 0,
+                'skip_start_count': 0,
+                'non_skip_start_count': 0,
+                'skip_start_avg_accuracy': None,
+                'non_skip_start_avg_accuracy': None,
+                'skip_start_outlier_rate': None,
+                'non_skip_start_outlier_rate': None,
+                'skip_start_outlier_count': 0,
+                'non_skip_start_outlier_count': 0,
+                'skip_start_first_match_count': 0,
+                'skip_start_first_mismatch_count': 0,
+                'non_skip_start_first_match_count': 0,
+                'non_skip_start_first_mismatch_count': 0,
+                'skip_start_first_match_avg_accuracy': None,
+                'skip_start_first_mismatch_avg_accuracy': None,
+                'non_skip_start_first_match_avg_accuracy': None,
+                'non_skip_start_first_mismatch_avg_accuracy': None
+            }
+        
+        # 스킵으로 시작한 게임과 그렇지 않은 게임 분리
+        skip_start = df[df['first_step_skipped'] == 1].copy()
+        non_skip_start = df[df['first_step_skipped'] == 0].copy()
+        
+        # 이상치 (불일치 6개 이상) 발생 비율
+        skip_start_outliers = skip_start[skip_start['max_consecutive_failures'] >= 6]
+        non_skip_start_outliers = non_skip_start[non_skip_start['max_consecutive_failures'] >= 6]
+        
+        # 통계 계산
+        total_complete_games = len(df)
+        skip_start_count = len(skip_start)
+        non_skip_start_count = len(non_skip_start)
+        
+        skip_start_avg_accuracy = skip_start['accuracy'].mean() if len(skip_start) > 0 else None
+        non_skip_start_avg_accuracy = non_skip_start['accuracy'].mean() if len(non_skip_start) > 0 else None
+        
+        skip_start_outlier_count = len(skip_start_outliers)
+        non_skip_start_outlier_count = len(non_skip_start_outliers)
+        
+        skip_start_outlier_rate = (skip_start_outlier_count / skip_start_count * 100) if skip_start_count > 0 else None
+        non_skip_start_outlier_rate = (non_skip_start_outlier_count / non_skip_start_count * 100) if non_skip_start_count > 0 else None
+        
+        # 첫 예측 일치/불일치 통계
+        skip_start_first_match = skip_start[skip_start['first_prediction_match'] == 1]
+        skip_start_first_mismatch = skip_start[skip_start['first_prediction_match'] == 0]
+        non_skip_start_first_match = non_skip_start[non_skip_start['first_prediction_match'] == 1]
+        non_skip_start_first_mismatch = non_skip_start[non_skip_start['first_prediction_match'] == 0]
+        
+        skip_start_first_match_count = len(skip_start_first_match)
+        skip_start_first_mismatch_count = len(skip_start_first_mismatch)
+        non_skip_start_first_match_count = len(non_skip_start_first_match)
+        non_skip_start_first_mismatch_count = len(non_skip_start_first_mismatch)
+        
+        skip_start_first_match_avg_accuracy = skip_start_first_match['accuracy'].mean() if len(skip_start_first_match) > 0 else None
+        skip_start_first_mismatch_avg_accuracy = skip_start_first_mismatch['accuracy'].mean() if len(skip_start_first_mismatch) > 0 else None
+        non_skip_start_first_match_avg_accuracy = non_skip_start_first_match['accuracy'].mean() if len(non_skip_start_first_match) > 0 else None
+        non_skip_start_first_mismatch_avg_accuracy = non_skip_start_first_mismatch['accuracy'].mean() if len(non_skip_start_first_mismatch) > 0 else None
+        
+        # DataFrame에 첫 예측 일치/불일치 정보 추가 (표시용)
+        skip_start_display = skip_start.copy()
+        skip_start_display['첫 예측 결과'] = skip_start_display['first_prediction_match'].apply(lambda x: '일치' if x == 1 else '불일치')
+        
+        non_skip_start_display = non_skip_start.copy()
+        non_skip_start_display['첫 예측 결과'] = non_skip_start_display['first_prediction_match'].apply(lambda x: '일치' if x == 1 else '불일치')
+        
+        return {
+            'total_complete_games': total_complete_games,
+            'skip_start_count': skip_start_count,
+            'non_skip_start_count': non_skip_start_count,
+            'skip_start_avg_accuracy': skip_start_avg_accuracy,
+            'non_skip_start_avg_accuracy': non_skip_start_avg_accuracy,
+            'skip_start_outlier_rate': skip_start_outlier_rate,
+            'non_skip_start_outlier_rate': non_skip_start_outlier_rate,
+            'skip_start_outlier_count': skip_start_outlier_count,
+            'non_skip_start_outlier_count': non_skip_start_outlier_count,
+            'skip_start_first_match_count': skip_start_first_match_count,
+            'skip_start_first_mismatch_count': skip_start_first_mismatch_count,
+            'non_skip_start_first_match_count': non_skip_start_first_match_count,
+            'non_skip_start_first_mismatch_count': non_skip_start_first_mismatch_count,
+            'skip_start_first_match_avg_accuracy': skip_start_first_match_avg_accuracy,
+            'skip_start_first_mismatch_avg_accuracy': skip_start_first_mismatch_avg_accuracy,
+            'non_skip_start_first_match_avg_accuracy': non_skip_start_first_match_avg_accuracy,
+            'non_skip_start_first_mismatch_avg_accuracy': non_skip_start_first_mismatch_avg_accuracy,
+            'skip_start_df': skip_start_display,
+            'non_skip_start_df': non_skip_start_display
+        }
+        
+    except Exception as e:
+        st.error(f"분석 중 오류 발생: {str(e)}")
+        import traceback
+        st.error(f"상세 오류: {traceback.format_exc()}")
+        return None
+    finally:
+        conn.close()
+
 def analyze_first_step_skip_correlation(validation_id):
     """
-    첫 스텝 스킵과 승률의 상관관계 분석
+    첫 스텝 스킵과 승률의 상관관계 분석 (기존 함수 - first_step_skip_analysis_results 사용)
     
     Args:
         validation_id: 분석할 validation_id
@@ -2098,195 +2326,207 @@ def main():
     st.markdown("---")
     st.markdown("## 첫 스텝 스킵 분석")
     st.markdown("첫 번째 예측 가능한 스텝에서 스킵으로 시작한 게임과 그렇지 않은 게임의 승률 상관관계 분석")
+    st.info("💡 이 분석은 '🎯 신뢰도 기반 스킵 전략 검증'에서 검증한 데이터를 사용합니다.")
     
-    with st.form("first_step_skip_analysis_form", clear_on_submit=False):
-        st.markdown("### 설정")
-        
-        col_skip1, col_skip2, col_skip3 = st.columns(3)
-        
-        with col_skip1:
-            skip_window_size = st.selectbox(
-                "윈도우 크기",
-                options=[5, 6, 7, 8, 9],
-                index=2,
-                key="skip_analysis_window_size",
-                help="예측에 사용할 윈도우 크기를 선택하세요"
-            )
-            skip_method = st.selectbox(
-                "예측 방법",
-                options=["빈도 기반", "가중치 기반"],
-                index=0,
-                key="skip_analysis_method",
-                help="예측 방법을 선택하세요"
-            )
-        
-        with col_skip2:
-            skip_use_threshold = st.checkbox(
-                "임계값 전략 사용",
-                value=True,
-                key="skip_analysis_use_threshold",
-                help="임계값 전략 사용 여부"
-            )
-            skip_threshold_val = st.number_input(
-                "임계값",
-                min_value=0,
-                max_value=100,
-                value=56,
-                step=1,
-                key="skip_analysis_threshold",
-                help="신뢰도 임계값 (%)",
-                disabled=not skip_use_threshold
-            )
-            skip_max_interval = st.number_input(
-                "최대 예측 없음 간격",
-                min_value=1,
-                max_value=20,
-                value=6,
-                step=1,
-                key="skip_analysis_max_interval",
-                help="최대 예측 없음 간격"
-            )
-        
-        with col_skip3:
-            skip_confidence_threshold = st.number_input(
-                "스킵 신뢰도 임계값",
-                min_value=0.0,
-                max_value=100.0,
-                value=51.0,
-                step=0.5,
-                key="skip_analysis_confidence_threshold",
-                help="이 값 미만의 신뢰도는 스킵됩니다"
+    # 검증 세션 선택
+    validation_sessions_df = load_validation_sessions()
+    
+    if len(validation_sessions_df) == 0:
+        st.warning("⚠️ 저장된 검증 세션이 없습니다. 먼저 '🎯 신뢰도 기반 스킵 전략 검증'에서 검증을 실행하고 결과를 저장해주세요.")
+    else:
+        with st.form("first_step_skip_analysis_form", clear_on_submit=False):
+            st.markdown("### 검증 세션 선택")
+            
+            # 검증 세션 선택
+            session_options = []
+            for idx, row in validation_sessions_df.iterrows():
+                session_label = (
+                    f"ID: {row['validation_id'][:8]}... | "
+                    f"Cutoff: {row['cutoff_grid_string_id']} | "
+                    f"윈도우: {row['window_size']} | "
+                    f"임계값1: {row['confidence_skip_threshold_1']:.1f}% | "
+                    f"임계값2: {row['confidence_skip_threshold_2']:.1f}% | "
+                    f"생성: {row['created_at']}"
+                )
+                session_options.append((row['validation_id'], session_label))
+            
+            selected_session_id = st.selectbox(
+                "검증 세션 선택",
+                options=[opt[0] for opt in session_options],
+                format_func=lambda x: next((opt[1] for opt in session_options if opt[0] == x), x),
+                key="first_step_skip_session_select"
             )
             
-            # cutoff_grid_string_id 선택
-            cutoff_query_skip = "SELECT id, created_at FROM preprocessed_grid_strings ORDER BY id"
-            cutoff_df_skip = pd.read_sql_query(cutoff_query_skip, get_db_connection())
-            cutoff_options_skip = [(None, "전체 데이터")]
-            for _, row in cutoff_df_skip.iterrows():
-                cutoff_options_skip.append((row['id'], row['created_at']))
+            # 선택된 세션 정보 표시
+            if selected_session_id:
+                selected_session = validation_sessions_df[validation_sessions_df['validation_id'] == selected_session_id].iloc[0]
+                
+                col_info1, col_info2, col_info3 = st.columns(3)
+                with col_info1:
+                    st.metric("윈도우 크기", selected_session['window_size'])
+                    st.metric("임계값 1", f"{selected_session['confidence_skip_threshold_1']:.1f}%")
+                with col_info2:
+                    st.metric("임계값 2", f"{selected_session['confidence_skip_threshold_2']:.1f}%")
+                    st.metric("Cutoff ID", selected_session['cutoff_grid_string_id'])
+                with col_info3:
+                    st.metric("예측 방법", selected_session['method'])
+                    st.metric("생성일", selected_session['created_at'])
+                
+                # 임계값 선택
+                threshold_option = st.radio(
+                    "분석할 임계값 선택",
+                    options=[selected_session['confidence_skip_threshold_1'], selected_session['confidence_skip_threshold_2']],
+                    format_func=lambda x: f"{x:.1f}%",
+                    key="first_step_skip_threshold_radio"
+                )
             
-            cutoff_id_skip = st.selectbox(
-                "학습 데이터 기준 (Cutoff Grid String ID)",
-                options=[opt[0] for opt in cutoff_options_skip],
-                format_func=lambda x: "전체 데이터" if x is None else next((f"ID {opt[0]} - {opt[1]}" for opt in cutoff_options_skip if opt[0] == x), f"ID {x} 이후"),
-                key="skip_analysis_cutoff_id",
-                help="이 ID 이하의 데이터를 학습 데이터로 사용합니다"
-            )
-        
-        submitted_skip = st.form_submit_button("첫 스텝 스킵 분석 실행", type="primary")
-        
-        if submitted_skip:
-            if cutoff_id_skip is None:
-                st.error("학습 데이터 기준을 선택해주세요.")
-            else:
-                with st.spinner("검증 실행 중..."):
-                    try:
-                        # 배치 검증 실행
-                        batch_results_skip = batch_validate_with_first_step_skip_analysis(
-                            cutoff_id_skip,
-                            window_size=skip_window_size,
-                            method=skip_method,
-                            use_threshold=skip_use_threshold,
-                            threshold=skip_threshold_val if skip_use_threshold else 60,
-                            max_interval=skip_max_interval,
-                            reverse_forced_prediction=False,
-                            confidence_skip_threshold=skip_confidence_threshold
-                        )
-                        
-                        if batch_results_skip and len(batch_results_skip.get('results', [])) > 0:
-                            # 결과 저장
-                            validation_id_skip = save_first_step_skip_analysis_results(
-                                cutoff_id_skip,
-                                skip_window_size,
-                                skip_method,
-                                skip_use_threshold,
-                                skip_threshold_val if skip_use_threshold else None,
-                                skip_max_interval,
-                                skip_confidence_threshold,
-                                batch_results_skip,
-                                grid_string_ids=batch_results_skip.get('grid_string_ids')
+            submitted_skip = st.form_submit_button("첫 스텝 스킵 분석 실행", type="primary")
+            
+            if submitted_skip:
+                if not selected_session_id:
+                    st.error("검증 세션을 선택해주세요.")
+                else:
+                    with st.spinner("분석 실행 중..."):
+                        try:
+                            # 기존 검증 데이터를 사용하여 분석
+                            analysis_result = analyze_first_step_skip_correlation_from_validation(
+                                selected_session_id,
+                                threshold_option
                             )
                             
-                            if validation_id_skip:
-                                st.session_state.first_step_skip_analysis_validation_id = validation_id_skip
-                                st.success(f"✅ 분석 결과가 저장되었습니다. (ID: {validation_id_skip[:8]}...)")
-                                
-                                # 분석 실행
-                                analysis_result = analyze_first_step_skip_correlation(validation_id_skip)
-                                
-                                if analysis_result:
-                                    st.markdown("### 분석 결과")
-                                    
-                                    # 요약 통계
-                                    col_summary1, col_summary2 = st.columns(2)
-                                    
-                                    with col_summary1:
-                                        st.markdown("#### 스킵으로 시작한 게임")
-                                        st.metric("게임 수", analysis_result['skip_start_count'])
-                                        if analysis_result['skip_start_avg_accuracy'] is not None:
-                                            st.metric("평균 승률", f"{analysis_result['skip_start_avg_accuracy']:.2f}%")
-                                        if analysis_result['skip_start_outlier_rate'] is not None:
-                                            st.metric("이상치 발생 비율", f"{analysis_result['skip_start_outlier_rate']:.2f}%")
-                                            st.caption(f"이상치 발생: {analysis_result['skip_start_outlier_count']}개")
-                                    
-                                    with col_summary2:
-                                        st.markdown("#### 스킵 없이 시작한 게임")
-                                        st.metric("게임 수", analysis_result['non_skip_start_count'])
-                                        if analysis_result['non_skip_start_avg_accuracy'] is not None:
-                                            st.metric("평균 승률", f"{analysis_result['non_skip_start_avg_accuracy']:.2f}%")
-                                        if analysis_result['non_skip_start_outlier_rate'] is not None:
-                                            st.metric("이상치 발생 비율", f"{analysis_result['non_skip_start_outlier_rate']:.2f}%")
-                                            st.caption(f"이상치 발생: {analysis_result['non_skip_start_outlier_count']}개")
-                                    
-                                    # 비교 차트
-                                    if analysis_result['skip_start_avg_accuracy'] is not None and analysis_result['non_skip_start_avg_accuracy'] is not None:
-                                        st.markdown("#### 승률 비교")
-                                        comparison_data = {
-                                            '시작 유형': ['스킵으로 시작', '스킵 없이 시작'],
-                                            '평균 승률': [
-                                                analysis_result['skip_start_avg_accuracy'],
-                                                analysis_result['non_skip_start_avg_accuracy']
-                                            ]
-                                        }
-                                        comparison_df = pd.DataFrame(comparison_data)
-                                        st.bar_chart(comparison_df.set_index('시작 유형'))
-                                        
-                                        # 차이 계산
-                                        accuracy_diff = analysis_result['non_skip_start_avg_accuracy'] - analysis_result['skip_start_avg_accuracy']
-                                        st.info(f"승률 차이: {accuracy_diff:+.2f}% (스킵 없이 시작한 게임이 {'높음' if accuracy_diff > 0 else '낮음'})")
-                                    
-                                    # 이상치 발생 비율 비교
-                                    if analysis_result['skip_start_outlier_rate'] is not None and analysis_result['non_skip_start_outlier_rate'] is not None:
-                                        st.markdown("#### 이상치 발생 비율 비교")
-                                        outlier_data = {
-                                            '시작 유형': ['스킵으로 시작', '스킵 없이 시작'],
-                                            '이상치 발생 비율': [
-                                                analysis_result['skip_start_outlier_rate'],
-                                                analysis_result['non_skip_start_outlier_rate']
-                                            ]
-                                        }
-                                        outlier_df = pd.DataFrame(outlier_data)
-                                        st.bar_chart(outlier_df.set_index('시작 유형'))
-                                        
-                                        # 차이 계산
-                                        outlier_diff = analysis_result['skip_start_outlier_rate'] - analysis_result['non_skip_start_outlier_rate']
-                                        st.info(f"이상치 발생 비율 차이: {outlier_diff:+.2f}% (스킵으로 시작한 게임이 {'높음' if outlier_diff > 0 else '낮음'})")
-                                    
-                                    # 상세 데이터
-                                    st.markdown("#### 상세 데이터")
-                                    if 'skip_start_df' in analysis_result and len(analysis_result['skip_start_df']) > 0:
-                                        st.markdown("**스킵으로 시작한 게임**")
-                                        st.dataframe(analysis_result['skip_start_df'], use_container_width=True)
-                                    
-                                    if 'non_skip_start_df' in analysis_result and len(analysis_result['non_skip_start_df']) > 0:
-                                        st.markdown("**스킵 없이 시작한 게임**")
-                                        st.dataframe(analysis_result['non_skip_start_df'], use_container_width=True)
-                        else:
-                            st.error("검증 실행 실패 또는 결과가 없습니다.")
-                    except Exception as e:
-                        st.error(f"분석 실행 중 오류 발생: {str(e)}")
-                        import traceback
-                        st.error(f"상세 오류: {traceback.format_exc()}")
+                            if analysis_result:
+                                # 분석 결과를 session_state에 저장
+                                st.session_state.first_step_skip_analysis_result = analysis_result
+                                st.session_state.first_step_skip_selected_session_id = selected_session_id
+                                st.session_state.first_step_skip_threshold_option = threshold_option
+                                st.success("분석이 완료되었습니다.")
+                            else:
+                                st.warning("분석 결과가 없습니다. 선택한 검증 세션에 데이터가 없을 수 있습니다.")
+                        except Exception as e:
+                            st.error(f"분석 실행 중 오류 발생: {str(e)}")
+                            import traceback
+                            st.error(f"상세 오류: {traceback.format_exc()}")
+    
+    # 분석 결과 표시 (form 밖에서 표시 - session_state에서 읽어서 표시)
+    if 'first_step_skip_analysis_result' in st.session_state:
+        analysis_result = st.session_state.first_step_skip_analysis_result
+        selected_session_id = st.session_state.first_step_skip_selected_session_id
+        threshold_option = st.session_state.first_step_skip_threshold_option
+        
+        st.markdown("---")
+        st.markdown("### 분석 결과")
+        
+        # 요약 통계
+        col_summary1, col_summary2 = st.columns(2)
+        
+        with col_summary1:
+            st.markdown("#### 스킵으로 시작한 게임")
+            st.metric("게임 수", analysis_result['skip_start_count'])
+            if analysis_result['skip_start_avg_accuracy'] is not None:
+                st.metric("평균 승률", f"{analysis_result['skip_start_avg_accuracy']:.2f}%")
+            if analysis_result['skip_start_outlier_rate'] is not None:
+                st.metric("이상치 발생 비율", f"{analysis_result['skip_start_outlier_rate']:.2f}%")
+                st.caption(f"이상치 발생: {analysis_result['skip_start_outlier_count']}개")
+            if analysis_result.get('skip_start_first_match_count', 0) > 0 or analysis_result.get('skip_start_first_mismatch_count', 0) > 0:
+                st.markdown("**첫 예측 결과별**")
+                if analysis_result.get('skip_start_first_match_avg_accuracy') is not None:
+                    st.caption(f"첫 예측 일치: {analysis_result['skip_start_first_match_count']}개, 평균 승률: {analysis_result['skip_start_first_match_avg_accuracy']:.2f}%")
+                if analysis_result.get('skip_start_first_mismatch_avg_accuracy') is not None:
+                    st.caption(f"첫 예측 불일치: {analysis_result['skip_start_first_mismatch_count']}개, 평균 승률: {analysis_result['skip_start_first_mismatch_avg_accuracy']:.2f}%")
+        
+        with col_summary2:
+            st.markdown("#### 스킵 없이 시작한 게임")
+            st.metric("게임 수", analysis_result['non_skip_start_count'])
+            if analysis_result['non_skip_start_avg_accuracy'] is not None:
+                st.metric("평균 승률", f"{analysis_result['non_skip_start_avg_accuracy']:.2f}%")
+            if analysis_result['non_skip_start_outlier_rate'] is not None:
+                st.metric("이상치 발생 비율", f"{analysis_result['non_skip_start_outlier_rate']:.2f}%")
+                st.caption(f"이상치 발생: {analysis_result['non_skip_start_outlier_count']}개")
+            if analysis_result.get('non_skip_start_first_match_count', 0) > 0 or analysis_result.get('non_skip_start_first_mismatch_count', 0) > 0:
+                st.markdown("**첫 예측 결과별**")
+                if analysis_result.get('non_skip_start_first_match_avg_accuracy') is not None:
+                    st.caption(f"첫 예측 일치: {analysis_result['non_skip_start_first_match_count']}개, 평균 승률: {analysis_result['non_skip_start_first_match_avg_accuracy']:.2f}%")
+                if analysis_result.get('non_skip_start_first_mismatch_avg_accuracy') is not None:
+                    st.caption(f"첫 예측 불일치: {analysis_result['non_skip_start_first_mismatch_count']}개, 평균 승률: {analysis_result['non_skip_start_first_mismatch_avg_accuracy']:.2f}%")
+        
+        # 차이 계산
+        if analysis_result['skip_start_avg_accuracy'] is not None and analysis_result['non_skip_start_avg_accuracy'] is not None:
+            accuracy_diff = analysis_result['non_skip_start_avg_accuracy'] - analysis_result['skip_start_avg_accuracy']
+            st.info(f"승률 차이: {accuracy_diff:+.2f}% (스킵 없이 시작한 게임이 {'높음' if accuracy_diff > 0 else '낮음'})")
+        
+        # 이상치 발생 비율 차이
+        if analysis_result['skip_start_outlier_rate'] is not None and analysis_result['non_skip_start_outlier_rate'] is not None:
+            outlier_diff = analysis_result['skip_start_outlier_rate'] - analysis_result['non_skip_start_outlier_rate']
+            st.info(f"이상치 발생 비율 차이: {outlier_diff:+.2f}% (스킵으로 시작한 게임이 {'높음' if outlier_diff > 0 else '낮음'})")
+        
+        # 상세 데이터
+        st.markdown("#### 상세 데이터")
+        if 'skip_start_df' in analysis_result and len(analysis_result['skip_start_df']) > 0:
+            st.markdown("**스킵으로 시작한 게임**")
+            st.dataframe(analysis_result['skip_start_df'], use_container_width=True)
+        
+        if 'non_skip_start_df' in analysis_result and len(analysis_result['non_skip_start_df']) > 0:
+            st.markdown("**스킵 없이 시작한 게임**")
+            st.dataframe(analysis_result['non_skip_start_df'], use_container_width=True)
+        
+        # 상세 히스토리 확인
+        st.markdown("---")
+        st.markdown("#### 상세 히스토리 확인")
+        
+        # 분석 결과에서 사용 가능한 grid_string_id 목록 가져오기
+        all_grid_string_ids = []
+        if 'skip_start_df' in analysis_result and len(analysis_result['skip_start_df']) > 0:
+            all_grid_string_ids.extend(analysis_result['skip_start_df']['grid_string_id'].tolist())
+        if 'non_skip_start_df' in analysis_result and len(analysis_result['non_skip_start_df']) > 0:
+            all_grid_string_ids.extend(analysis_result['non_skip_start_df']['grid_string_id'].tolist())
+        
+        if len(all_grid_string_ids) > 0:
+            selected_grid_string_id = st.selectbox(
+                "Grid String ID 선택",
+                options=sorted(set(all_grid_string_ids)),
+                key="first_step_skip_grid_string_select"
+            )
+            
+            if selected_grid_string_id:
+                # 상세 히스토리 로드
+                steps_df = load_validation_session_steps(selected_session_id, threshold_option)
+                grid_steps_df = steps_df[steps_df['grid_string_id'] == selected_grid_string_id].sort_values('step')
+                
+                if len(grid_steps_df) > 0:
+                    st.markdown(f"**Grid String ID {selected_grid_string_id} 상세 히스토리**")
+                    
+                    # 히스토리 데이터 포맷팅
+                    history_data = []
+                    for _, row in grid_steps_df.iterrows():
+                        is_correct = row.get('is_correct')
+                        match_status = '✅' if (is_correct == 1 or is_correct is True) else ('❌' if (is_correct == 0 or is_correct is False) else '-')
+                        skipped_val = row.get('skipped')
+                        skipped = '⏭️' if (skipped_val == 1 or skipped_val is True) else ''
+                        is_forced = '⚡' if (row.get('is_forced') == 1 or row.get('is_forced') is True) else ''
+                        validated = '✓' if (row.get('validated') == 1 or row.get('validated') is True) else ''
+                        
+                        has_prediction_val = row.get('has_prediction')
+                        has_prediction = (has_prediction_val == 1 or has_prediction_val is True)
+                        
+                        history_data.append({
+                            '스텝': row.get('step'),
+                            'Prefix': row.get('prefix', ''),
+                            '예측': f"{row.get('predicted') or '-'}{is_forced}{skipped}",
+                            '실제값': row.get('actual', ''),
+                            '일치': match_status,
+                            '신뢰도': f"{row.get('confidence', 0):.1f}%" if has_prediction else '-',
+                            '강제예측': '✓' if (row.get('is_forced') == 1 or row.get('is_forced') is True) else '',
+                            '검증': validated,
+                            '스킵': '✓' if (row.get('skipped') == 1 or row.get('skipped') is True) else '',
+                            '간격': row.get('current_interval', 0)
+                        })
+                    
+                    history_df = pd.DataFrame(history_data)
+                    st.dataframe(history_df, use_container_width=True, hide_index=True)
+                else:
+                    st.warning(f"Grid String ID {selected_grid_string_id}의 상세 히스토리를 찾을 수 없습니다.")
+        else:
+            st.info("상세 히스토리를 확인할 수 있는 Grid String ID가 없습니다.")
 
 if __name__ == "__main__":
     main()

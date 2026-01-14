@@ -24,10 +24,9 @@ streamlit run interactive_multi_step_validation_app.py
 
 streamlit run confidence_skip_hypothesis_analysis_app.py
 
+streamlit run optimal_threshold_finder_app.py
 
 
-
-# 로컬 파일을 드롭박스로 복사 (폴더가 없으면 자동으로 생성됨)
 ./rclone.exe copy pattern_analysis_v4.db dropbox:project_db
 
 ./rclone.exe copy --include "*.db" ./ dropbox:project_db
@@ -38,7 +37,7 @@ copy(document.querySelector('.rf_ri').outerHTML);
 
 
 -------------------------------
-git config --global user.email "arche00@gmail.com"
+git config --global user.email "arche0840@gmail.com"
 
 git config --global user.name "tj"
 
@@ -52,16 +51,20 @@ git push origin master
 
 
 --------
-스킵 임계값을 높을수록 승률이 높을 것이라고 생각해서 
-51.5로 지정을 했더니 
-스킵되는 절차가 너무 많은 상황이야 
+?�킵 ?�계값을 ?�을?�록 ?�률???�을 것이?�고 ?�각?�서 
+51.5�?지?�을 ?�더??
+?�킵?�는 ?�차가 ?�무 많�? ?�황?�야 
 
-게임의 목적인 불일치 연속스텝이 5이하를 달성할 수 있는
-최적의 임계값을 찾을수 있는 방법을 
-시뮬레이션을 통해 찾을 수 있을지 고민해서 계획을 세워줘 
+게임??목적??불일�??�속?�텝??5?�하�??�성?????�는
+최적???�계값을 찾을???�는 방법??
+?��??�이?�을 ?�해 찾을 ???�을지 고�??�서 계획???�워�?
 
 
+-------------------------------
+���� ���� �н������͸� 
+�ùķ��̼�, ���̺���Ӱ� �����ϰ� ����� �� 
 
+git checkout -b fix/training-validation-separation
 
 
 

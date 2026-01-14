@@ -1641,9 +1641,10 @@ def validate_ensemble_interactive_scenario(grid_string_id, cutoff_grid_string_id
                 'history': []
             }
         
-        # 학습 데이터 구축 (cutoff_grid_string_id 이하)
-        train_ids_query = "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id"
-        train_ids_df = pd.read_sql_query(train_ids_query, conn, params=[cutoff_grid_string_id])
+        # 학습 데이터 구축 (cutoff_grid_string_id 이하, 검증 데이터 제외)
+        # grid_string_id가 cutoff_grid_string_id 이하인 경우 학습 데이터에서 제외
+        train_ids_query = "SELECT id FROM preprocessed_grid_strings WHERE id <= ? AND id < ? ORDER BY id"
+        train_ids_df = pd.read_sql_query(train_ids_query, conn, params=[cutoff_grid_string_id, grid_string_id])
         train_ids = train_ids_df['id'].tolist() if len(train_ids_df) > 0 else []
         
         # N-gram 로드

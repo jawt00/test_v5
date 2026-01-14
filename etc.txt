@@ -16,11 +16,11 @@ pip install -r requirements.txt
 
 streamlit run hypothesis_validation_app.py
 
-streamlit run svg_parser
+streamlit run svg_parser_app.py
 
 streamlit run live_game_app.py 
 
-streamlit run interactive_multi_step_validation.py 
+streamlit run interactive_multi_step_validation_app.py 
 
 streamlit run confidence_skip_hypothesis_analysis_app.py
 
@@ -50,6 +50,15 @@ git commit -m "$(date +%Y%m%d_%H%M)"
 
 git push origin master
 
+
+--------
+스킵 임계값을 높을수록 승률이 높을 것이라고 생각해서 
+51.5로 지정을 했더니 
+스킵되는 절차가 너무 많은 상황이야 
+
+게임의 목적인 불일치 연속스텝이 5이하를 달성할 수 있는
+최적의 임계값을 찾을수 있는 방법을 
+시뮬레이션을 통해 찾을 수 있을지 고민해서 계획을 세워줘 
 
 
 

@@ -354,7 +354,7 @@ def render_live_game_play(game_state):
     
     # 다음 스텝 경로 미리보기
     st.markdown("---")
-    st.markdown('<p style="font-size: 1em; color: #666; margin-top: -10px;"><strong>다음 스텝 경로 미리보기:</strong></p>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size: 1.2em; color: #666; margin-top: -10px;"><strong>다음 스텝 경로 미리보기:</strong></p>', unsafe_allow_html=True)
     
     # 다음 prefix 생성 (b와 p 두 경우 모두)
     next_prefix_b = get_next_prefix(current_prefix, 'b', game_state['window_size'])
@@ -444,23 +444,23 @@ def render_live_game_play(game_state):
         with col_path1:
             if next_pred_b is not None and str(next_pred_b).strip() != '':
                 forced_marker = " ⚡" if next_forced_b else ""
-                st.markdown(f'<p style="font-size: 0.95em; color: #333;">실제값 <strong>b</strong> → 다음 prefix: <code>{next_prefix_b}</code> → 예측: <code>{next_pred_b}{forced_marker}</code> ({next_conf_b:.1f}%)</p>', unsafe_allow_html=True)
+                st.markdown(f'<p style="font-size: 1.1em; color: #333;">실제값 <strong>b</strong> → 다음 prefix: <code>{next_prefix_b}</code> → 예측: <code>{next_pred_b}{forced_marker}</code> ({next_conf_b:.1f}%)</p>', unsafe_allow_html=True)
             else:
-                st.markdown(f'<p style="font-size: 0.95em; color: #666;">실제값 <strong>b</strong> → 다음 prefix: <code>{next_prefix_b}</code> → 예측: <code>-</code></p>', unsafe_allow_html=True)
+                st.markdown(f'<p style="font-size: 1.1em; color: #666;">실제값 <strong>b</strong> → 다음 prefix: <code>{next_prefix_b}</code> → 예측: <code>-</code></p>', unsafe_allow_html=True)
         
         with col_path2:
             if next_pred_p is not None and str(next_pred_p).strip() != '':
                 forced_marker = " ⚡" if next_forced_p else ""
-                st.markdown(f'<p style="font-size: 0.95em; color: #333;">실제값 <strong>p</strong> → 다음 prefix: <code>{next_prefix_p}</code> → 예측: <code>{next_pred_p}{forced_marker}</code> ({next_conf_p:.1f}%)</p>', unsafe_allow_html=True)
+                st.markdown(f'<p style="font-size: 1.1em; color: #333;">실제값 <strong>p</strong> → 다음 prefix: <code>{next_prefix_p}</code> → 예측: <code>{next_pred_p}{forced_marker}</code> ({next_conf_p:.1f}%)</p>', unsafe_allow_html=True)
             else:
-                st.markdown(f'<p style="font-size: 0.95em; color: #666;">실제값 <strong>p</strong> → 다음 prefix: <code>{next_prefix_p}</code> → 예측: <code>-</code></p>', unsafe_allow_html=True)
+                st.markdown(f'<p style="font-size: 1.1em; color: #666;">실제값 <strong>p</strong> → 다음 prefix: <code>{next_prefix_p}</code> → 예측: <code>-</code></p>', unsafe_allow_html=True)
     else:
         # 모델이 없는 경우 prefix만 표시
         col_path1, col_path2 = st.columns(2)
         with col_path1:
-            st.markdown(f'<p style="font-size: 0.95em; color: #666;">실제값 <strong>b</strong> → 다음 prefix: <code>{next_prefix_b}</code></p>', unsafe_allow_html=True)
+            st.markdown(f'<p style="font-size: 1.1em; color: #666;">실제값 <strong>b</strong> → 다음 prefix: <code>{next_prefix_b}</code></p>', unsafe_allow_html=True)
         with col_path2:
-            st.markdown(f'<p style="font-size: 0.95em; color: #666;">실제값 <strong>p</strong> → 다음 prefix: <code>{next_prefix_p}</code></p>', unsafe_allow_html=True)
+            st.markdown(f'<p style="font-size: 1.1em; color: #666;">실제값 <strong>p</strong> → 다음 prefix: <code>{next_prefix_p}</code></p>', unsafe_allow_html=True)
     
     # 실제값 입력 (버튼식)
     if has_prediction and not should_skip:
@@ -991,7 +991,7 @@ def main():
                 "최대 간격",
                 min_value=1,
                 max_value=20,
-                value=5,
+                value=4,
                 step=1,
                 key="live_game_max_interval"
             )
@@ -1000,7 +1000,7 @@ def main():
                 "신뢰도 스킵 임계값 (%)",
                 min_value=0.0,
                 max_value=100.0,
-                value=50.9,
+                value=51.5,
                 step=0.1,
                 key="live_game_confidence_skip_threshold",
                 help="임계값 미만일 때만 스킵합니다. 예: 50.9를 설정하면 50.9 미만만 스킵하고, 50.9 이상은 게임을 실행합니다. (0.1 단위로 설정 가능: 50.9, 51.9, 52.9...)"

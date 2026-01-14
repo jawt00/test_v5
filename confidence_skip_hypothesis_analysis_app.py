@@ -1770,6 +1770,12 @@ def main():
     st.markdown("---")
     st.markdown("### 검증 세션 선택")
     
+    # 데이터 불러오기 버튼
+    col_refresh, _ = st.columns([1, 5])
+    with col_refresh:
+        if st.button("🔄 데이터 불러오기", key="refresh_validation_sessions"):
+            st.rerun()
+    
     sessions_df = load_validation_sessions()
     
     if len(sessions_df) == 0:
@@ -2334,8 +2340,15 @@ def main():
     if len(validation_sessions_df) == 0:
         st.warning("⚠️ 저장된 검증 세션이 없습니다. 먼저 '🎯 신뢰도 기반 스킵 전략 검증'에서 검증을 실행하고 결과를 저장해주세요.")
     else:
+        st.markdown("### 검증 세션 선택")
+        
+        # 데이터 불러오기 버튼
+        col_refresh, _ = st.columns([1, 5])
+        with col_refresh:
+            if st.button("🔄 데이터 불러오기", key="refresh_first_step_skip_sessions"):
+                st.rerun()
+        
         with st.form("first_step_skip_analysis_form", clear_on_submit=False):
-            st.markdown("### 검증 세션 선택")
             
             # 검증 세션 선택
             session_options = []

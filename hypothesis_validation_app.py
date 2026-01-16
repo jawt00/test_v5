@@ -826,31 +826,48 @@ def predict_frequency(model, prefix):
 #     return predict_frequency(model, prefix)
 # ============================================================================
 
-def build_weighted_model(ngrams_df, weight_decay=0.95):
+def build_weighted_model(ngrams_df, weight_decay=0.95, id_weight_decay=0.99):
     """
     가중치 기반 모델 구축
     최근 조각에 더 높은 가중치 부여
+    - grid_string_id가 클수록 최근 데이터로 간주하여 높은 가중치 부여
+    - 각 grid_string_id 내에서도 chunk_index가 클수록 높은 가중치 부여
     
     Args:
         ngrams_df: N-gram 조각 DataFrame
-        weight_decay: 가중치 감쇠율 (0~1)
+        weight_decay: 가중치 감쇠율 (0~1) - chunk_index 기반 가중치 감쇠율
+        id_weight_decay: grid_string_id 기반 가중치 감쇠율 (0~1) - 기본값 0.99
     
     Returns:
         dict: {prefix: {suffix: weighted_count, ...}, ...}
     """
     model = defaultdict(lambda: defaultdict(float))
     
+    # 전체 grid_string_id 범위 계산
+    if len(ngrams_df) == 0:
+        return dict(model)
+    
+    max_grid_string_id = ngrams_df['grid_string_id'].max()
+    
     # grid_string_id별로 그룹화하여 순서 보존
     grouped = ngrams_df.groupby('grid_string_id')
     
     for grid_string_id, group_df in grouped:
+        # grid_string_id 기반 가중치 (큰 id일수록 높은 가중치)
+        # max_grid_string_id에 가까울수록 최근 데이터로 간주
+        id_weight = id_weight_decay ** (max_grid_string_id - grid_string_id)
+        
         # 최근 조각에 더 높은 가중치
         group_df = group_df.sort_values('chunk_index')
         max_index = len(group_df)
         
         for idx, (_, row) in enumerate(group_df.iterrows()):
-            # 가중치: 최근 조각일수록 높음
-            weight = weight_decay ** (max_index - idx - 1)
+            # chunk_index 기반 가중치 (최근 chunk일수록 높은 가중치)
+            chunk_weight = weight_decay ** (max_index - idx - 1)
+            
+            # 최종 가중치 = id_weight * chunk_weight
+            # 최근 grid_string_id의 최근 chunk에 가장 높은 가중치
+            weight = id_weight * chunk_weight
             
             prefix = row['prefix']
             suffix = row['suffix']

@@ -1,3 +1,7 @@
+winget install Microsoft.WindowsTerminal
+https://github.com/microsoft/terminal/releases
+
+
 https://github.com/arche00/test_v5
 cd /c/
 
@@ -72,5 +76,7 @@ git checkout -b fix/training-validation-separation
 아닌 경우가 있어서 확인필요 
 
 
+윈도우 크기=8, 최대 간격=1, 임계값=53.0%
 
+윈도우 크기=8, 최대 간격=6, 임계값=53.5%
 

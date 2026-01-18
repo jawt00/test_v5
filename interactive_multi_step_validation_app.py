@@ -35,6 +35,147 @@ from hypothesis_validation_app import (
 # DB 경로
 DB_PATH = 'hypothesis_validation.db'
 
+def get_prediction_from_stored_table(prefix, window_size, method, threshold=0):
+    """
+    stored_predictions 테이블에서 예측값 조회
+    
+    Args:
+        prefix: 예측할 prefix 문자열
+        window_size: 윈도우 크기
+        method: 예측 방법 ("빈도 기반" 또는 "가중치 기반")
+        threshold: 임계값 (기본값: 0)
+    
+    Returns:
+        dict: {
+            'predicted': 예측값 ('b' 또는 'p' 또는 None),
+            'confidence': 신뢰도,
+            'ratios': {'b': b_ratio, 'p': p_ratio},
+            'is_forced': False (테이블에서 가져온 예측은 강제 예측이 아님)
+        }
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return {
+            'predicted': None,
+            'confidence': 0.0,
+            'ratios': {},
+            'is_forced': False
+        }
+    
+    try:
+        query = """
+            SELECT predicted_value, confidence, b_ratio, p_ratio
+            FROM stored_predictions
+            WHERE window_size = ?
+              AND prefix = ?
+              AND method = ?
+              AND threshold = ?
+            LIMIT 1
+        """
+        
+        df = pd.read_sql_query(
+            query,
+            conn,
+            params=[window_size, prefix, method, threshold]
+        )
+        
+        if len(df) > 0:
+            row = df.iloc[0]
+            return {
+                'predicted': row['predicted_value'],
+                'confidence': row['confidence'],
+                'ratios': {'b': row['b_ratio'], 'p': row['p_ratio']},
+                'is_forced': False
+            }
+        else:
+            return {
+                'predicted': None,
+                'confidence': 0.0,
+                'ratios': {},
+                'is_forced': False
+            }
+            
+    except Exception as e:
+        return {
+            'predicted': None,
+            'confidence': 0.0,
+            'ratios': {},
+            'is_forced': False
+        }
+    finally:
+        conn.close()
+
+def predict_with_fallback_interval_stored(
+    prefix,
+    window_size,
+    method,
+    threshold=60,
+    max_interval=6,
+    current_interval=0,
+    stored_threshold=0
+):
+    """
+    stored_predictions 테이블 기반 임계값 전략 예측 (강제 예측 포함)
+    
+    Args:
+        prefix: 예측할 prefix 문자열
+        window_size: 윈도우 크기
+        method: 예측 방법
+        threshold: 임계값 (%)
+        max_interval: 최대 예측 없음 간격
+        current_interval: 현재 예측 없음 간격
+        stored_threshold: stored_predictions에서 조회할 임계값
+    
+    Returns:
+        dict: {
+            'predicted': 예측값,
+            'confidence': 신뢰도,
+            'ratios': 비율 딕셔너리,
+            'is_forced': 강제 예측 여부
+        }
+    """
+    # stored_predictions에서 예측값 조회
+    result = get_prediction_from_stored_table(prefix, window_size, method, stored_threshold)
+    
+    predicted = result.get('predicted')
+    confidence = result.get('confidence', 0.0)
+    ratios = result.get('ratios', {})
+    
+    if predicted is None:
+        # prefix가 테이블에 없는 경우
+        return {
+            'predicted': None,
+            'confidence': 0.0,
+            'ratios': {},
+            'is_forced': False
+        }
+    
+    # 임계값 전략 적용
+    if confidence >= threshold:
+        # 신뢰도가 임계값 이상이면 예측
+        return {
+            'predicted': predicted,
+            'confidence': confidence,
+            'ratios': ratios,
+            'is_forced': False
+        }
+    elif current_interval >= max_interval:
+        # 간격이 최대치를 넘으면 강제 예측
+        return {
+            'predicted': predicted,
+            'confidence': confidence,
+            'ratios': ratios,
+            'is_forced': True
+        }
+    else:
+        # 예측 안 함
+        return {
+            'predicted': None,
+            'confidence': confidence,
+            'ratios': ratios,
+            'is_forced': False
+        }
+
 def create_validation_tables():
     """검증 결과 저장을 위한 테이블 생성"""
     conn = get_db_connection()
@@ -1101,7 +1242,9 @@ def validate_interactive_multi_step_scenario_with_confidence_skip(
     threshold=60,
     max_interval=6,
     reverse_forced_prediction=False,
-    confidence_skip_threshold=51
+    confidence_skip_threshold=51,
+    use_stored_predictions=False,
+    stored_threshold=0
 ):
     """
     신뢰도 기반 스킵 규칙이 있는 인터랙티브 다단계 예측 시나리오 검증
@@ -1122,6 +1265,8 @@ def validate_interactive_multi_step_scenario_with_confidence_skip(
         max_interval: 최대 예측 없음 간격
         reverse_forced_prediction: 반대 선택 전략 사용 여부
         confidence_skip_threshold: 스킵할 신뢰도 임계값 (기본값: 51)
+        use_stored_predictions: 예측값 테이블(stored_predictions) 사용 여부 (기본값: False)
+        stored_threshold: stored_predictions 조회 시 사용할 임계값 (기본값: 0)
     
     Returns:
         dict: 검증 결과
@@ -1156,38 +1301,41 @@ def validate_interactive_multi_step_scenario_with_confidence_skip(
                 'history': []
             }
         
-        # 학습 데이터 구축 (검증 데이터 제외)
-        # grid_string_id가 cutoff_grid_string_id 이하인 경우 학습 데이터에서 제외
-        train_ids_query = "SELECT id FROM preprocessed_grid_strings WHERE id <= ? AND id < ? ORDER BY id"
-        train_ids_df = pd.read_sql_query(train_ids_query, conn, params=[cutoff_grid_string_id, grid_string_id])
-        train_ids = train_ids_df['id'].tolist() if len(train_ids_df) > 0 else []
-        
-        # N-gram 로드
-        train_ngrams = load_ngram_chunks(window_size=window_size, grid_string_ids=train_ids)
-        
-        if len(train_ngrams) == 0:
-            return {
-                'grid_string_id': grid_string_id,
-                'max_consecutive_failures': 0,
-                'max_consecutive_matches': 0,
-                'total_steps': 0,
-                'total_failures': 0,
-                'total_predictions': 0,
-                'total_forced_predictions': 0,
-                'total_skipped_predictions': 0,
-                'forced_prediction_rate': 0.0,
-                'accuracy': 0.0,
-                'first_success_step': None,
-                'history': []
-            }
-        
-        # 모델 구축
-        if method == "빈도 기반":
-            model = build_frequency_model(train_ngrams)
-        elif method == "가중치 기반":
-            model = build_weighted_model(train_ngrams)
-        else:
-            model = build_frequency_model(train_ngrams)
+        # 예측값 테이블 사용 여부에 따라 모델 구축 또는 스킵
+        model = None
+        if not use_stored_predictions:
+            # 실시간 모델 사용: 학습 데이터 구축 (검증 데이터 제외)
+            # grid_string_id가 cutoff_grid_string_id 이하인 경우 학습 데이터에서 제외
+            train_ids_query = "SELECT id FROM preprocessed_grid_strings WHERE id <= ? AND id < ? ORDER BY id"
+            train_ids_df = pd.read_sql_query(train_ids_query, conn, params=[cutoff_grid_string_id, grid_string_id])
+            train_ids = train_ids_df['id'].tolist() if len(train_ids_df) > 0 else []
+            
+            # N-gram 로드
+            train_ngrams = load_ngram_chunks(window_size=window_size, grid_string_ids=train_ids)
+            
+            if len(train_ngrams) == 0:
+                return {
+                    'grid_string_id': grid_string_id,
+                    'max_consecutive_failures': 0,
+                    'max_consecutive_matches': 0,
+                    'total_steps': 0,
+                    'total_failures': 0,
+                    'total_predictions': 0,
+                    'total_forced_predictions': 0,
+                    'total_skipped_predictions': 0,
+                    'forced_prediction_rate': 0.0,
+                    'accuracy': 0.0,
+                    'first_success_step': None,
+                    'history': []
+                }
+            
+            # 모델 구축
+            if method == "빈도 기반":
+                model = build_frequency_model(train_ngrams)
+            elif method == "가중치 기반":
+                model = build_weighted_model(train_ngrams)
+            else:
+                model = build_frequency_model(train_ngrams)
         
         # 시나리오 방식으로 테스트
         prefix_length = window_size - 1
@@ -1231,23 +1379,48 @@ def validate_interactive_multi_step_scenario_with_confidence_skip(
             actual_value = grid_string[i]
             
             # 예측 수행 (기본 규칙: 모든 스텝에서 예측 시도)
-            if use_threshold:
-                # 임계값 전략 사용: 임계값 이상일 때만 예측, 아니면 강제 예측
-                prediction_result = predict_with_fallback_interval(
-                    model,
-                    current_prefix,
-                    method=method,
-                    threshold=threshold,
-                    max_interval=max_interval,
-                    current_interval=current_interval
-                )
+            if use_stored_predictions:
+                # 예측값 테이블 사용
+                if use_threshold:
+                    # 임계값 전략 사용: 임계값 이상일 때만 예측, 아니면 강제 예측
+                    prediction_result = predict_with_fallback_interval_stored(
+                        current_prefix,
+                        window_size,
+                        method,
+                        threshold=threshold,
+                        max_interval=max_interval,
+                        current_interval=current_interval,
+                        stored_threshold=stored_threshold
+                    )
+                else:
+                    # 임계값 전략 미사용: 모든 스텝에서 예측
+                    prediction_result = get_prediction_from_stored_table(
+                        current_prefix,
+                        window_size,
+                        method,
+                        stored_threshold
+                    )
+                    if 'is_forced' not in prediction_result:
+                        prediction_result['is_forced'] = False
             else:
-                # 임계값 전략 미사용: 모든 스텝에서 예측 (기본 규칙)
-                prediction_result = predict_for_prefix(model, current_prefix, method)
-                # predict_for_prefix는 항상 예측값을 반환하거나 None을 반환
-                # None인 경우도 있으므로 is_forced는 False로 설정
-                if 'is_forced' not in prediction_result:
-                    prediction_result['is_forced'] = False
+                # 실시간 모델 사용
+                if use_threshold:
+                    # 임계값 전략 사용: 임계값 이상일 때만 예측, 아니면 강제 예측
+                    prediction_result = predict_with_fallback_interval(
+                        model,
+                        current_prefix,
+                        method=method,
+                        threshold=threshold,
+                        max_interval=max_interval,
+                        current_interval=current_interval
+                    )
+                else:
+                    # 임계값 전략 미사용: 모든 스텝에서 예측 (기본 규칙)
+                    prediction_result = predict_for_prefix(model, current_prefix, method)
+                    # predict_for_prefix는 항상 예측값을 반환하거나 None을 반환
+                    # None인 경우도 있으므로 is_forced는 False로 설정
+                    if 'is_forced' not in prediction_result:
+                        prediction_result['is_forced'] = False
             
             predicted_value = prediction_result.get('predicted')
             confidence = prediction_result.get('confidence', 0.0)
@@ -1773,7 +1946,9 @@ def batch_validate_interactive_multi_step_scenario_with_confidence_skip(
     threshold=60,
     max_interval=6,
     reverse_forced_prediction=False,
-    confidence_skip_threshold=51
+    confidence_skip_threshold=51,
+    use_stored_predictions=False,
+    stored_threshold=0
 ):
     """
     신뢰도 기반 스킵 규칙이 있는 배치 검증
@@ -1787,6 +1962,8 @@ def batch_validate_interactive_multi_step_scenario_with_confidence_skip(
         max_interval: 최대 예측 없음 간격
         reverse_forced_prediction: 반대 선택 전략 사용 여부
         confidence_skip_threshold: 스킵할 신뢰도 임계값
+        use_stored_predictions: 예측값 테이블(stored_predictions) 사용 여부 (기본값: False)
+        stored_threshold: stored_predictions 조회 시 사용할 임계값 (기본값: 0)
     
     Returns:
         dict: 배치 검증 결과
@@ -1832,7 +2009,9 @@ def batch_validate_interactive_multi_step_scenario_with_confidence_skip(
                 threshold=threshold,
                 max_interval=max_interval,
                 reverse_forced_prediction=reverse_forced_prediction,
-                confidence_skip_threshold=confidence_skip_threshold
+                confidence_skip_threshold=confidence_skip_threshold,
+                use_stored_predictions=use_stored_predictions,
+                stored_threshold=stored_threshold
             )
             
             if result is not None:
@@ -3748,6 +3927,31 @@ def main():
                     help="이 신뢰도 이상일 때만 예측"
                 )
         
+        # 예측값 테이블 사용 옵션 (새로운 행)
+        st.markdown("---")
+        st.markdown("**📊 예측 모델 선택**")
+        col_model1, col_model2 = st.columns(2)
+        
+        with col_model1:
+            skip_use_stored_predictions = st.checkbox(
+                "예측값 테이블 사용 (stored_predictions)",
+                value=False,
+                key="confidence_skip_use_stored_predictions",
+                help="체크하면 stored_predictions 테이블의 예측값을 사용, 체크 해제하면 실시간 모델 사용"
+            )
+        
+        with col_model2:
+            skip_stored_threshold = st.number_input(
+                "테이블 조회 임계값",
+                min_value=0,
+                max_value=100,
+                value=0,
+                step=1,
+                key="confidence_skip_stored_threshold",
+                help="stored_predictions 테이블에서 조회할 때 사용할 임계값 (기본값: 0)",
+                disabled=not st.session_state.get('confidence_skip_use_stored_predictions', False)
+            )
+        
         col_skip4, col_skip5 = st.columns(2)
         with col_skip4:
             skip_max_interval = st.number_input(
@@ -3840,12 +4044,22 @@ def main():
         skip_max_interval = st.session_state.get('confidence_skip_max_interval', 5)
         skip_confidence_threshold_1 = st.session_state.get('confidence_skip_threshold_1', 51)
         skip_confidence_threshold_2 = st.session_state.get('confidence_skip_threshold_2', 52)
+        # 예측값 테이블 사용 옵션
+        skip_use_stored_predictions = st.session_state.get('confidence_skip_use_stored_predictions', False)
+        skip_stored_threshold = st.session_state.get('confidence_skip_stored_threshold', 0)
+        
+        # 예측 모델 정보 표시
+        if skip_use_stored_predictions:
+            st.info(f"📊 **예측값 테이블 사용**: stored_predictions (임계값: {skip_stored_threshold})")
+        else:
+            st.info("🧠 **실시간 모델 사용**: 학습 데이터 기반 모델 생성")
         
         # 첫 번째 임계값 검증 실행
         if 'confidence_skip_results_1' in st.session_state and st.session_state.confidence_skip_results_1 is not None:
             batch_results_skip_1 = st.session_state.confidence_skip_results_1
         else:
-            with st.spinner(f"신뢰도 스킵 전략 검증 실행 중... (임계값 1: {skip_confidence_threshold_1}%)"):
+            model_type_str = "예측값 테이블" if skip_use_stored_predictions else "실시간 모델"
+            with st.spinner(f"신뢰도 스킵 전략 검증 실행 중... (임계값 1: {skip_confidence_threshold_1}%, {model_type_str})"):
                 try:
                     batch_results_skip_1 = batch_validate_interactive_multi_step_scenario_with_confidence_skip(
                         cutoff_id_skip,
@@ -3855,7 +4069,9 @@ def main():
                         threshold=skip_threshold_val if skip_use_threshold else 60,
                         max_interval=skip_max_interval,
                         reverse_forced_prediction=False,
-                        confidence_skip_threshold=skip_confidence_threshold_1
+                        confidence_skip_threshold=skip_confidence_threshold_1,
+                        use_stored_predictions=skip_use_stored_predictions,
+                        stored_threshold=skip_stored_threshold
                     )
                     
                     if batch_results_skip_1 is not None:
@@ -3872,7 +4088,8 @@ def main():
         if 'confidence_skip_results_2' in st.session_state and st.session_state.confidence_skip_results_2 is not None:
             batch_results_skip_2 = st.session_state.confidence_skip_results_2
         else:
-            with st.spinner(f"신뢰도 스킵 전략 검증 실행 중... (임계값 2: {skip_confidence_threshold_2}%)"):
+            model_type_str = "예측값 테이블" if skip_use_stored_predictions else "실시간 모델"
+            with st.spinner(f"신뢰도 스킵 전략 검증 실행 중... (임계값 2: {skip_confidence_threshold_2}%, {model_type_str})"):
                 try:
                     batch_results_skip_2 = batch_validate_interactive_multi_step_scenario_with_confidence_skip(
                         cutoff_id_skip,
@@ -3882,7 +4099,9 @@ def main():
                         threshold=skip_threshold_val if skip_use_threshold else 60,
                         max_interval=skip_max_interval,
                         reverse_forced_prediction=False,
-                        confidence_skip_threshold=skip_confidence_threshold_2
+                        confidence_skip_threshold=skip_confidence_threshold_2,
+                        use_stored_predictions=skip_use_stored_predictions,
+                        stored_threshold=skip_stored_threshold
                     )
                     
                     if batch_results_skip_2 is not None:

@@ -323,10 +323,15 @@ def render_live_game_play(game_state):
     p_ratio = ratios.get('p', 0.0) if ratios else 0.0
     
     # 스킵 규칙 체크
-    # 신뢰도가 임계값 미만일 때만 스킵 (예: 임계값 52이면 51 이하만 스킵, 52는 실행)
+    # 신뢰도가 임계값 미만일 때만 스킵 (예: 임계값 52이면 51.9 이하만 스킵, 52.0은 실행)
+    # 반올림된 값으로 비교하여 표시와 동작의 일관성 보장 (소수점 1자리)
     should_skip = False
-    if game_state['use_threshold'] and has_prediction and is_forced and confidence < game_state['confidence_skip_threshold']:
-        should_skip = True
+    if game_state['use_threshold'] and has_prediction and is_forced:
+        # 소수점 1자리로 반올림하여 비교 (표시와 일치하도록)
+        rounded_confidence = round(confidence, 1)
+        rounded_threshold = round(game_state['confidence_skip_threshold'], 1)
+        if rounded_confidence < rounded_threshold:
+            should_skip = True
     
     # 현재 스텝 정보 표시 (컴팩트하게)
     col_info1, col_info2, col_info3, col_info4 = st.columns(4)
@@ -440,19 +445,35 @@ def render_live_game_play(game_state):
         except Exception as e:
             pass
         
+        # 다음 스텝 스킵 여부 계산 (반올림된 값으로 비교)
+        next_skip_b = False
+        next_skip_p = False
+        if game_state['use_threshold']:
+            rounded_threshold = round(game_state['confidence_skip_threshold'], 1)
+            if next_pred_b is not None and next_forced_b:
+                rounded_conf_b = round(next_conf_b, 1)
+                if rounded_conf_b < rounded_threshold:
+                    next_skip_b = True
+            if next_pred_p is not None and next_forced_p:
+                rounded_conf_p = round(next_conf_p, 1)
+                if rounded_conf_p < rounded_threshold:
+                    next_skip_p = True
+        
         # 경로 표시
         col_path1, col_path2 = st.columns(2)
         with col_path1:
             if next_pred_b is not None and str(next_pred_b).strip() != '':
                 forced_marker = " ⚡" if next_forced_b else ""
-                st.markdown(f'<p style="font-size: 1.1em; color: #333;">실제값 <strong>b</strong> → 다음 prefix: <code>{next_prefix_b}</code> → 예측: <code>{next_pred_b}{forced_marker}</code> ({next_conf_b:.1f}%)</p>', unsafe_allow_html=True)
+                skip_marker = " ⏭️" if next_skip_b else ""
+                st.markdown(f'<p style="font-size: 1.1em; color: #333;">실제값 <strong>b</strong> → 다음 prefix: <code>{next_prefix_b}</code> → 예측: <code>{next_pred_b}{forced_marker}{skip_marker}</code> ({next_conf_b:.1f}%)</p>', unsafe_allow_html=True)
             else:
                 st.markdown(f'<p style="font-size: 1.1em; color: #666;">실제값 <strong>b</strong> → 다음 prefix: <code>{next_prefix_b}</code> → 예측: <code>-</code></p>', unsafe_allow_html=True)
         
         with col_path2:
             if next_pred_p is not None and str(next_pred_p).strip() != '':
                 forced_marker = " ⚡" if next_forced_p else ""
-                st.markdown(f'<p style="font-size: 1.1em; color: #333;">실제값 <strong>p</strong> → 다음 prefix: <code>{next_prefix_p}</code> → 예측: <code>{next_pred_p}{forced_marker}</code> ({next_conf_p:.1f}%)</p>', unsafe_allow_html=True)
+                skip_marker = " ⏭️" if next_skip_p else ""
+                st.markdown(f'<p style="font-size: 1.1em; color: #333;">실제값 <strong>p</strong> → 다음 prefix: <code>{next_prefix_p}</code> → 예측: <code>{next_pred_p}{forced_marker}{skip_marker}</code> ({next_conf_p:.1f}%)</p>', unsafe_allow_html=True)
             else:
                 st.markdown(f'<p style="font-size: 1.1em; color: #666;">실제값 <strong>p</strong> → 다음 prefix: <code>{next_prefix_p}</code> → 예측: <code>-</code></p>', unsafe_allow_html=True)
     else:
@@ -1329,10 +1350,17 @@ def main():
                                         p_ratio = ratios.get('p', 0.0) if ratios else 0.0
                                         
                                         # 스킵 규칙 체크
-                                        # 신뢰도가 임계값 미만일 때만 스킵 (예: 임계값 52이면 51 이하만 스킵, 52는 실행)
+                                        # 신뢰도가 임계값 미만일 때만 스킵 (예: 임계값 52이면 51.9 이하만 스킵, 52.0은 실행)
+                                        # 반올림된 값으로 비교하여 표시와 동작의 일관성 보장 (소수점 1자리)
                                         should_skip = False
-                                        if settings['use_threshold'] and has_prediction and is_forced and confidence < settings['confidence_skip_threshold']:
-                                            should_skip = True
+                                        if settings['use_threshold'] and has_prediction and is_forced:
+                                            # 소수점 1자리로 반올림하여 비교 (표시와 일치하도록)
+                                            rounded_confidence = round(confidence, 1)
+                                            rounded_threshold = round(settings['confidence_skip_threshold'], 1)
+                                            if rounded_confidence < rounded_threshold:
+                                                should_skip = True
+                                        
+                                        if should_skip:
                                             total_skipped_predictions += 1
                                         
                                         # 실제값 가져오기 (grid_string에서)

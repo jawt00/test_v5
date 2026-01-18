@@ -26,7 +26,13 @@ from hypothesis_validation_app import (
     get_db_connection,
     load_preprocessed_data,
     create_stored_predictions_table,
-    save_or_update_predictions_for_historical_data
+    save_or_update_predictions_for_historical_data,
+    load_ngram_chunks,
+    build_frequency_model,
+    build_weighted_model,
+    predict_frequency,
+    predict_weighted,
+    predict_for_prefix
 )
 
 # interactive_multi_step_validation_app에서 필요한 함수들 import
@@ -54,14 +60,20 @@ def create_simulation_tables():
                 session_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 validation_id TEXT NOT NULL UNIQUE,
                 cutoff_grid_string_id INTEGER NOT NULL,
-                window_size INTEGER NOT NULL,
+                window_size INTEGER,
                 method TEXT NOT NULL,
                 use_threshold BOOLEAN NOT NULL,
                 threshold REAL,
-                max_interval INTEGER NOT NULL,
-                min_skip_threshold REAL NOT NULL,
-                max_skip_threshold REAL NOT NULL,
-                step REAL NOT NULL,
+                max_interval INTEGER,
+                min_skip_threshold REAL,
+                max_skip_threshold REAL,
+                step REAL,
+                search_method TEXT DEFAULT 'single',
+                window_size_min INTEGER,
+                window_size_max INTEGER,
+                max_interval_min INTEGER,
+                max_interval_max INTEGER,
+                num_samples INTEGER,
                 created_at TIMESTAMP DEFAULT (datetime('now', '+9 hours'))
             )
         ''')
@@ -72,6 +84,8 @@ def create_simulation_tables():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 validation_id TEXT NOT NULL,
                 confidence_skip_threshold REAL NOT NULL,
+                window_size INTEGER,
+                max_interval INTEGER,
                 max_consecutive_failures INTEGER NOT NULL,
                 avg_max_consecutive_failures REAL NOT NULL,
                 total_skipped_predictions INTEGER NOT NULL,
@@ -84,8 +98,7 @@ def create_simulation_tables():
                 total_failures INTEGER NOT NULL,
                 total_predictions INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT (datetime('now', '+9 hours')),
-                FOREIGN KEY (validation_id) REFERENCES optimal_threshold_simulation_sessions(validation_id),
-                UNIQUE(validation_id, confidence_skip_threshold)
+                FOREIGN KEY (validation_id) REFERENCES optimal_threshold_simulation_sessions(validation_id)
             )
         ''')
         
@@ -144,6 +157,62 @@ def create_simulation_tables():
             ON optimal_threshold_simulation_grid_results(confidence_skip_threshold)
         ''')
         
+        # 기존 테이블에 새 컬럼 추가 (마이그레이션)
+        try:
+            # 테이블 존재 여부 확인
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='optimal_threshold_simulation_sessions'")
+            table_exists = cursor.fetchone()
+            
+            if table_exists:
+                # 컬럼 존재 여부 확인 (PRAGMA table_info 사용)
+                cursor.execute("PRAGMA table_info(optimal_threshold_simulation_sessions)")
+                existing_columns = [row[1] for row in cursor.fetchall()]
+                
+                # 컬럼 추가
+                new_columns = [
+                    ('search_method', 'TEXT DEFAULT "single"'),
+                    ('window_size_min', 'INTEGER'),
+                    ('window_size_max', 'INTEGER'),
+                    ('max_interval_min', 'INTEGER'),
+                    ('max_interval_max', 'INTEGER'),
+                    ('num_samples', 'INTEGER')
+                ]
+                
+                for col_name, col_def in new_columns:
+                    if col_name not in existing_columns:
+                        try:
+                            cursor.execute(f"ALTER TABLE optimal_threshold_simulation_sessions ADD COLUMN {col_name} {col_def}")
+                        except sqlite3.OperationalError:
+                            pass  # 무시
+            
+            # optimal_threshold_simulation_results 테이블 확인 및 마이그레이션
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='optimal_threshold_simulation_results'")
+            results_table_exists = cursor.fetchone()
+            
+            if results_table_exists:
+                cursor.execute("PRAGMA table_info(optimal_threshold_simulation_results)")
+                existing_result_columns = [row[1] for row in cursor.fetchall()]
+                
+                new_result_columns = [
+                    ('window_size', 'INTEGER'),
+                    ('max_interval', 'INTEGER')
+                ]
+                
+                for col_name, col_def in new_result_columns:
+                    if col_name not in existing_result_columns:
+                        try:
+                            cursor.execute(f"ALTER TABLE optimal_threshold_simulation_results ADD COLUMN {col_name} {col_def}")
+                        except sqlite3.OperationalError:
+                            pass  # 무시
+            
+            conn.commit()
+        except Exception as e:
+            # 마이그레이션 실패해도 테이블 생성은 성공한 것으로 간주
+            try:
+                conn.rollback()
+            except:
+                pass
+        
         conn.commit()
         return True
         
@@ -160,7 +229,7 @@ def simulate_single_threshold(
     window_size=7,
     method="빈도 기반",
     use_threshold=True,
-    main_threshold=60,
+    main_threshold=56,
     max_interval=6
 ):
     """
@@ -237,7 +306,7 @@ def random_search_multi_dimensional(
     num_samples=100,
     method="빈도 기반",
     use_threshold=True,
-    main_threshold=60,
+    main_threshold=56,
     progress_bar=None,
     status_text=None,
     enable_early_stop=False,
@@ -440,7 +509,7 @@ def batch_simulate_threshold_range(
     window_size=7,
     method="빈도 기반",
     use_threshold=True,
-    main_threshold=60,
+    main_threshold=56,
     max_interval=6,
     min_skip_threshold=50.5,
     max_skip_threshold=51.5,
@@ -575,7 +644,7 @@ def hybrid_search_optimal_threshold(
     window_size=7,
     method="빈도 기반",
     use_threshold=True,
-    main_threshold=60,
+    main_threshold=56,
     max_interval=6,
     min_skip_threshold=50.5,
     max_skip_threshold=51.5,
@@ -861,53 +930,24 @@ def find_optimal_multi_dimensional(simulation_results):
     
     all_results = simulation_results['results']
     
-    # 1차 필터링: 최대 연속 불일치가 5 이하이고 유의미한 조합만 선별
-    # 유의미한 결과 조건:
-    # - 예측률 >= 10% (너무 적게 예측한 경우 제외)
-    # - 스킵 비율 <= 90% (너무 많이 스킵한 경우 제외)
-    # - 총 예측 횟수 >= 10회 (통계적으로 의미 있는 최소 예측 횟수)
+    # 1차 필터링: 최대 연속 불일치가 5 이하인 조합만 선별 (최우선 조건)
     candidates = [
         r for r in all_results
         if r.get('max_consecutive_failures', 999) <= 5
-        and r.get('prediction_rate', 0.0) >= 10.0      # 예측률 최소 10% 이상
-        and r.get('avg_skip_rate', 100.0) <= 90.0      # 스킵 비율 최대 90% 이하
-        and r.get('total_predictions', 0) >= 10         # 최소 10회 이상 예측
     ]
     
     if len(candidates) == 0:
-        # 조건을 만족하는 조합이 없으면 유의미한 결과 중에서 선택
-        # 유의미한 결과: 예측률 >= 10%, 스킵 비율 <= 90%, 최소 10회 예측
-        meaningful_results = [
-            r for r in all_results
-            if r.get('prediction_rate', 0.0) >= 10.0
-            and r.get('avg_skip_rate', 100.0) <= 90.0
-            and r.get('total_predictions', 0) >= 10
-        ]
-        
-        if len(meaningful_results) > 0:
-            # 유의미한 결과가 있으면 그 중에서 최선을 선택
-            all_results_sorted = sorted(
-                meaningful_results,
-                key=lambda x: (
-                    x.get('max_consecutive_failures', 999),
-                    x.get('total_skipped_predictions', 999999),
-                    -x.get('avg_accuracy', 0.0)
-                )
+        # 최대 연속 불일치 5 이하인 조합이 없으면 전체 결과에서 선택
+        all_results_sorted = sorted(
+            all_results,
+            key=lambda x: (
+                x.get('max_consecutive_failures', 999),
+                x.get('total_skipped_predictions', 999999),
+                -x.get('avg_accuracy', 0.0)
             )
-            optimal_result = all_results_sorted[0]
-            warning_msg = '최대 연속 불일치 5 이하를 만족하는 조합이 없습니다. 유의미한 결과 중 최선의 조합을 선택했습니다.'
-        else:
-            # 유의미한 결과조차 없으면 전체 결과에서 선택
-            all_results_sorted = sorted(
-                all_results,
-                key=lambda x: (
-                    x.get('max_consecutive_failures', 999),
-                    x.get('total_skipped_predictions', 999999),
-                    -x.get('avg_accuracy', 0.0)
-                )
-            )
-            optimal_result = all_results_sorted[0] if all_results_sorted else None
-            warning_msg = '최대 연속 불일치 5 이하를 만족하는 조합이 없습니다. 유의미한 결과도 없어 전체 결과 중 최선의 조합을 선택했습니다.'
+        )
+        optimal_result = all_results_sorted[0] if all_results_sorted else None
+        warning_msg = '최대 연속 불일치 5 이하를 만족하는 조합이 없습니다. 전체 결과 중 최선의 조합을 선택했습니다.'
         
         if optimal_result:
             optimal_combination = {
@@ -926,9 +966,24 @@ def find_optimal_multi_dimensional(simulation_results):
             'warning': warning_msg
         }
     
-    # 2차 정렬: 최대 연속 불일치가 가장 낮은 순, 동일하면 스킵 횟수가 적은 순, 동일하면 정확도가 높은 순
+    # 2차 필터링: 유의미한 결과 우선 선택 (선택적)
+    # 유의미한 결과 조건:
+    # - 예측률 >= 10% (너무 적게 예측한 경우 제외)
+    # - 스킵 비율 <= 90% (너무 많이 스킵한 경우 제외)
+    # - 총 예측 횟수 >= 10회 (통계적으로 의미 있는 최소 예측 횟수)
+    meaningful_candidates = [
+        r for r in candidates
+        if r.get('prediction_rate', 0.0) >= 10.0
+        and r.get('avg_skip_rate', 100.0) <= 90.0
+        and r.get('total_predictions', 0) >= 10
+    ]
+    
+    # 유의미한 결과가 있으면 그 중에서 선택, 없으면 전체 후보에서 선택
+    final_candidates = meaningful_candidates if len(meaningful_candidates) > 0 else candidates
+    
+    # 3차 정렬: 최대 연속 불일치가 가장 낮은 순, 동일하면 스킵 횟수가 적은 순, 동일하면 정확도가 높은 순
     candidates_sorted = sorted(
-        candidates,
+        final_candidates,
         key=lambda x: (
             x.get('max_consecutive_failures', 999),
             x.get('total_skipped_predictions', 999999),
@@ -944,12 +999,174 @@ def find_optimal_multi_dimensional(simulation_results):
         'result': optimal_result
     }
     
+    # 유의미한 결과가 없었는지 확인 (경고 메시지용)
+    warning_msg = None
+    if len(meaningful_candidates) == 0 and len(candidates) > 0:
+        warning_msg = '⚠️ 최대 연속 불일치 5 이하 조건은 만족하지만, 유의미한 결과 조건(예측률 ≥10%, 스킵 비율 ≤90%, 최소 10회 예측)을 만족하지 않아 전체 후보 중에서 선택했습니다.'
+    
     return {
         'optimal_combination': optimal_combination,
         'candidates': candidates_sorted,
         'all_results': all_results,
-        'candidate_count': len(candidates)
+        'candidate_count': len(candidates),
+        'warning': warning_msg
     }
+
+def save_multi_dimensional_simulation_results(
+    cutoff_id,
+    window_size_range,
+    max_interval_range,
+    confidence_skip_range,
+    num_samples,
+    method,
+    use_threshold,
+    main_threshold,
+    simulation_results,
+    optimal_result
+):
+    """
+    다차원 최적화 시뮬레이션 결과 DB 저장
+    
+    Args:
+        cutoff_id: 기준 grid_string ID
+        window_size_range: (min, max) 튜플
+        max_interval_range: (min, max) 튜플
+        confidence_skip_range: (min, max, step) 튜플
+        num_samples: 샘플링 개수
+        method: 예측 방법
+        use_threshold: 임계값 전략 사용 여부
+        main_threshold: 메인 임계값
+        simulation_results: random_search_multi_dimensional()의 반환값
+        optimal_result: find_optimal_multi_dimensional()의 반환값
+    
+    Returns:
+        str: validation_id (저장 성공 시), None (실패 시)
+    """
+    if not create_simulation_tables():
+        return None
+    
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    
+    cursor = conn.cursor()
+    
+    try:
+        validation_id = str(uuid.uuid4())
+        window_size_min, window_size_max = window_size_range
+        max_interval_min, max_interval_max = max_interval_range
+        skip_min, skip_max, skip_step = confidence_skip_range
+        
+        # 세션 저장
+        # 다차원 모드에서는 window_size가 없으므로 기본값으로 범위의 중간값 사용 (제약 조건 우회)
+        default_window_size = (window_size_min + window_size_max) // 2 if window_size_max > window_size_min else window_size_min
+        default_max_interval = (max_interval_min + max_interval_max) // 2 if max_interval_max > max_interval_min else max_interval_min
+        
+        cursor.execute('''
+            INSERT INTO optimal_threshold_simulation_sessions (
+                validation_id, cutoff_grid_string_id, window_size, method,
+                use_threshold, threshold, max_interval,
+                search_method, window_size_min, window_size_max,
+                max_interval_min, max_interval_max,
+                min_skip_threshold, max_skip_threshold, step, num_samples,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'multi_dimensional', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
+        ''', (
+            validation_id, cutoff_id, default_window_size, method, use_threshold,
+            main_threshold if use_threshold else None, default_max_interval,
+            window_size_min, window_size_max,
+            max_interval_min, max_interval_max,
+            skip_min, skip_max, skip_step, num_samples
+        ))
+        
+        # 각 조합별 결과 저장
+        for result in simulation_results.get('results', []):
+            # 기존 레코드 확인 (validation_id, confidence_skip_threshold, window_size, max_interval 조합)
+            cursor.execute('''
+                SELECT id FROM optimal_threshold_simulation_results
+                WHERE validation_id = ? 
+                  AND confidence_skip_threshold = ?
+                  AND window_size = ?
+                  AND max_interval = ?
+            ''', (
+                validation_id,
+                result.get('confidence_skip_threshold'),
+                result.get('window_size'),
+                result.get('max_interval')
+            ))
+            existing = cursor.fetchone()
+            
+            if existing:
+                # 기존 레코드 업데이트
+                cursor.execute('''
+                    UPDATE optimal_threshold_simulation_results SET
+                        max_consecutive_failures = ?,
+                        avg_max_consecutive_failures = ?,
+                        total_skipped_predictions = ?,
+                        avg_skip_rate = ?,
+                        below_5_ratio = ?,
+                        avg_accuracy = ?,
+                        prediction_rate = ?,
+                        total_grid_strings = ?,
+                        total_steps = ?,
+                        total_failures = ?,
+                        total_predictions = ?,
+                        created_at = datetime('now', '+9 hours')
+                    WHERE id = ?
+                ''', (
+                    result.get('max_consecutive_failures', 0),
+                    result.get('avg_max_consecutive_failures', 0.0),
+                    result.get('total_skipped_predictions', 0),
+                    result.get('avg_skip_rate', 0.0),
+                    result.get('below_5_ratio', 0.0),
+                    result.get('avg_accuracy', 0.0),
+                    result.get('prediction_rate', 0.0),
+                    result.get('total_grid_strings', 0),
+                    result.get('total_steps', 0),
+                    result.get('total_failures', 0),
+                    result.get('total_predictions', 0),
+                    existing[0]
+                ))
+            else:
+                # 새 레코드 삽입
+                cursor.execute('''
+                    INSERT INTO optimal_threshold_simulation_results (
+                        validation_id, confidence_skip_threshold, window_size, max_interval,
+                        max_consecutive_failures, avg_max_consecutive_failures,
+                        total_skipped_predictions, avg_skip_rate,
+                        below_5_ratio, avg_accuracy, prediction_rate,
+                        total_grid_strings, total_steps, total_failures, total_predictions,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
+                ''', (
+                    validation_id,
+                    result.get('confidence_skip_threshold'),
+                    result.get('window_size'),
+                    result.get('max_interval'),
+                    result.get('max_consecutive_failures', 0),
+                    result.get('avg_max_consecutive_failures', 0.0),
+                    result.get('total_skipped_predictions', 0),
+                    result.get('avg_skip_rate', 0.0),
+                    result.get('below_5_ratio', 0.0),
+                    result.get('avg_accuracy', 0.0),
+                    result.get('prediction_rate', 0.0),
+                    result.get('total_grid_strings', 0),
+                    result.get('total_steps', 0),
+                    result.get('total_failures', 0),
+                    result.get('total_predictions', 0)
+                ))
+        
+        conn.commit()
+        return validation_id
+        
+    except Exception as e:
+        conn.rollback()
+        st.error(f"다차원 시뮬레이션 결과 저장 중 오류: {str(e)}")
+        import traceback
+        st.error(f"상세 오류: {traceback.format_exc()}")
+        return None
+    finally:
+        conn.close()
 
 def save_simulation_results(
     cutoff_id,
@@ -1002,8 +1219,8 @@ def save_simulation_results(
                 validation_id, cutoff_grid_string_id, window_size, method,
                 use_threshold, threshold, max_interval,
                 min_skip_threshold, max_skip_threshold, step,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
+                search_method, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'single', datetime('now', '+9 hours'))
         ''', (
             validation_id,
             cutoff_id,
@@ -1092,42 +1309,172 @@ def load_simulation_sessions():
         return pd.DataFrame()
     
     try:
-        query = """
-            SELECT 
-                s.validation_id,
-                s.cutoff_grid_string_id,
-                s.window_size,
-                s.method,
-                s.use_threshold,
-                s.threshold,
-                s.max_interval,
-                s.min_skip_threshold,
-                s.max_skip_threshold,
-                s.step,
-                s.created_at,
-                r.confidence_skip_threshold as optimal_threshold,
-                r.max_consecutive_failures,
-                r.below_5_ratio,
-                r.avg_accuracy
-            FROM optimal_threshold_simulation_sessions s
-            LEFT JOIN (
+        # 먼저 테이블 생성 및 마이그레이션 실행
+        create_simulation_tables()
+        
+        # 컬럼 존재 여부 확인
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(optimal_threshold_simulation_sessions)")
+        columns_info = cursor.fetchall()
+        existing_columns = [row[1] for row in columns_info]
+        
+        # search_method 컬럼이 없으면 기본값으로 조회
+        if 'search_method' not in existing_columns:
+            # 컬럼이 없을 때는 search_method를 선택하지 않음
+            query = """
                 SELECT 
-                    validation_id,
-                    confidence_skip_threshold,
-                    max_consecutive_failures,
-                    below_5_ratio,
-                    avg_accuracy,
-                    ROW_NUMBER() OVER (PARTITION BY validation_id ORDER BY max_consecutive_failures ASC, total_skipped_predictions ASC) as rn
-                FROM optimal_threshold_simulation_results
-                WHERE max_consecutive_failures <= 5
-            ) r ON s.validation_id = r.validation_id AND r.rn = 1
-            ORDER BY s.created_at DESC
-        """
+                    s.validation_id,
+                    s.cutoff_grid_string_id,
+                    s.window_size,
+                    s.method,
+                    s.use_threshold,
+                    s.threshold,
+                    s.max_interval,
+                    s.min_skip_threshold,
+                    s.max_skip_threshold,
+                    s.step,
+                    'single' as search_method,
+                    s.created_at,
+                    r.confidence_skip_threshold as optimal_threshold,
+                    r.max_consecutive_failures,
+                    r.below_5_ratio,
+                    r.avg_accuracy
+                FROM optimal_threshold_simulation_sessions s
+                LEFT JOIN (
+                    SELECT 
+                        validation_id,
+                        confidence_skip_threshold,
+                        max_consecutive_failures,
+                        below_5_ratio,
+                        avg_accuracy,
+                        ROW_NUMBER() OVER (PARTITION BY validation_id ORDER BY max_consecutive_failures ASC, total_skipped_predictions ASC) as rn
+                    FROM optimal_threshold_simulation_results
+                    WHERE max_consecutive_failures <= 5
+                ) r ON s.validation_id = r.validation_id AND r.rn = 1
+                ORDER BY s.created_at DESC
+            """
+        else:
+            query = """
+                SELECT 
+                    s.validation_id,
+                    s.cutoff_grid_string_id,
+                    s.window_size,
+                    s.method,
+                    s.use_threshold,
+                    s.threshold,
+                    s.max_interval,
+                    s.min_skip_threshold,
+                    s.max_skip_threshold,
+                    s.step,
+                    s.search_method,
+                    s.created_at,
+                    r.confidence_skip_threshold as optimal_threshold,
+                    r.max_consecutive_failures,
+                    r.below_5_ratio,
+                    r.avg_accuracy
+                FROM optimal_threshold_simulation_sessions s
+                LEFT JOIN (
+                    SELECT 
+                        validation_id,
+                        confidence_skip_threshold,
+                        max_consecutive_failures,
+                        below_5_ratio,
+                        avg_accuracy,
+                        ROW_NUMBER() OVER (PARTITION BY validation_id ORDER BY max_consecutive_failures ASC, total_skipped_predictions ASC) as rn
+                    FROM optimal_threshold_simulation_results
+                    WHERE max_consecutive_failures <= 5
+                ) r ON s.validation_id = r.validation_id AND r.rn = 1
+                ORDER BY s.created_at DESC
+            """
+        
         df = pd.read_sql_query(query, conn)
         return df
     except Exception as e:
         st.error(f"시뮬레이션 세션 로드 오류: {str(e)}")
+        import traceback
+        st.error(f"상세 오류: {traceback.format_exc()}")
         return pd.DataFrame()
+    finally:
+        conn.close()
+
+def load_latest_multi_dimensional_result(cutoff_id=None):
+    """
+    최근 다차원 최적화 결과 1개 로드
+    
+    Args:
+        cutoff_id: 기준 grid_string ID (None이면 전체에서 최근 결과)
+    
+    Returns:
+        dict: 최근 결과 정보 또는 None
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    
+    try:
+        if cutoff_id is None:
+            query = """
+                SELECT validation_id
+                FROM optimal_threshold_simulation_sessions
+                WHERE search_method = 'multi_dimensional'
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            params = []
+        else:
+            query = """
+                SELECT validation_id
+                FROM optimal_threshold_simulation_sessions
+                WHERE search_method = 'multi_dimensional'
+                  AND cutoff_grid_string_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            params = [cutoff_id]
+        
+        df = pd.read_sql_query(query, conn, params=params)
+        
+        if len(df) == 0:
+            return None
+        
+        validation_id = df.iloc[0]['validation_id']
+        
+        # 세션 정보 로드
+        session_query = """
+            SELECT *
+            FROM optimal_threshold_simulation_sessions
+            WHERE validation_id = ?
+        """
+        session_df = pd.read_sql_query(session_query, conn, params=[validation_id])
+        
+        if len(session_df) == 0:
+            return None
+        
+        session_info = session_df.iloc[0].to_dict()
+        
+        # 최적 결과 로드
+        optimal_query = """
+            SELECT *
+            FROM optimal_threshold_simulation_results
+            WHERE validation_id = ?
+            ORDER BY max_consecutive_failures ASC, total_skipped_predictions ASC
+            LIMIT 1
+        """
+        optimal_df = pd.read_sql_query(optimal_query, conn, params=[validation_id])
+        
+        if len(optimal_df) > 0:
+            session_info['optimal_result'] = optimal_df.iloc[0].to_dict()
+        
+        # 전체 결과 개수
+        count_query = "SELECT COUNT(*) as count FROM optimal_threshold_simulation_results WHERE validation_id = ?"
+        count_df = pd.read_sql_query(count_query, conn, params=[validation_id])
+        session_info['total_results'] = count_df.iloc[0]['count'] if len(count_df) > 0 else 0
+        
+        return session_info
+        
+    except Exception as e:
+        st.error(f"최근 다차원 결과 로드 오류: {str(e)}")
+        return None
     finally:
         conn.close()
 
@@ -3127,6 +3474,44 @@ def display_multi_dimensional_results(simulation_results, optimal_result, cutoff
     # 조기 종료 정보
     if simulation_results.get('early_stopped', False):
         st.info(f"⚡ **조기 종료**: 충분한 유의미한 결과를 찾아 {total_planned - total_tested}개 조합을 건너뛰었습니다. 시간 절약: 약 {int((total_planned - total_tested) * 0.3)}분")
+    
+    # 결과 저장 버튼 (session_state에서 필요한 파라미터 가져오기)
+    st.markdown("---")
+    col_save1, col_save2 = st.columns([1, 4])
+    with col_save1:
+        if st.button("💾 결과 저장", type="primary", use_container_width=True, key="save_multi_dimensional"):
+            # session_state에서 다차원 설정 가져오기
+            window_size_min = st.session_state.get('multi_window_size_min', 5)
+            window_size_max = st.session_state.get('multi_window_size_max', 9)
+            max_interval_min = st.session_state.get('multi_max_interval_min', 1)
+            max_interval_max = st.session_state.get('multi_max_interval_max', 20)
+            min_skip_threshold = st.session_state.get('multi_min_skip_threshold', 51.0)
+            max_skip_threshold = st.session_state.get('multi_max_skip_threshold', 53.5)
+            threshold_step = st.session_state.get('multi_threshold_step', 0.1)
+            num_samples = st.session_state.get('multi_num_samples', 100)
+            
+            validation_id = save_multi_dimensional_simulation_results(
+                cutoff_id,
+                (window_size_min, window_size_max),
+                (max_interval_min, max_interval_max),
+                (min_skip_threshold, max_skip_threshold, threshold_step),
+                num_samples,
+                method,
+                use_threshold,
+                main_threshold if use_threshold else 56,
+                simulation_results,
+                optimal_result
+            )
+            
+            if validation_id:
+                st.session_state.multi_dimensional_saved_id = validation_id
+                st.success(f"✅ 다차원 시뮬레이션 결과가 저장되었습니다. (ID: {validation_id[:8]}...)")
+            else:
+                st.warning("⚠️ 결과 저장에 실패했습니다.")
+    
+    with col_save2:
+        if 'multi_dimensional_saved_id' in st.session_state:
+            st.info(f"💾 마지막 저장 ID: {st.session_state.multi_dimensional_saved_id[:8]}...")
 
 def display_results(simulation_results, optimal_result, cutoff_id, window_size, method, use_threshold, main_threshold, max_interval):
     """결과 표시 함수"""
@@ -3189,7 +3574,7 @@ def display_results(simulation_results, optimal_result, cutoff_id, window_size, 
                 window_size,
                 method,
                 use_threshold,
-                main_threshold if use_threshold else 60,
+                main_threshold if use_threshold else 56,
                 max_interval,
                 50.5,
                 51.5,
@@ -3223,8 +3608,65 @@ def main():
             st.error("테이블 생성 실패")
             return
     
+    # 최근 결과 표시 (이전에 저장된 결과가 있으면 표시)
+    st.markdown("---")
+    st.markdown("### 📋 최근 저장된 결과")
+    
+    latest_result = load_latest_multi_dimensional_result()
+    if latest_result and 'optimal_result' in latest_result:
+        opt_result = latest_result['optimal_result']
+        
+        col_recent1, col_recent2, col_recent3 = st.columns(3)
+        with col_recent1:
+            st.metric("최대 연속 불일치", f"{opt_result.get('max_consecutive_failures', 0)}회")
+        with col_recent2:
+            st.metric("평균 정확도", f"{opt_result.get('avg_accuracy', 0):.2f}%")
+        with col_recent3:
+            st.metric("총 테스트 조합", f"{latest_result.get('total_results', 0)}개")
+        
+        if opt_result.get('window_size') and opt_result.get('max_interval'):
+            st.info(
+                f"**최근 저장된 최적 조합** (저장 시간: {latest_result.get('created_at', 'N/A')}): "
+                f"윈도우 크기={opt_result.get('window_size')}, "
+                f"최대 간격={opt_result.get('max_interval')}, "
+                f"임계값={opt_result.get('confidence_skip_threshold', 0):.1f}%"
+            )
+    else:
+        st.info("💡 저장된 결과가 없습니다. 시뮬레이션을 실행하고 결과를 저장하면 여기에 표시됩니다.")
+    
     # 최적화 모드 선택 (form 외부에 배치하여 즉시 반영되도록 함)
     st.markdown("### ⚙️ 시뮬레이션 설정")
+    
+    # 데이터 새로고침 버튼
+    col_refresh1, col_refresh2 = st.columns([1, 4])
+    with col_refresh1:
+        refresh_clicked = st.button("🔄 데이터 새로고침", key="simulation_refresh_data", use_container_width=True)
+    with col_refresh2:
+        auto_refresh = st.checkbox(
+            "시뮬레이션 실행 시 자동 새로고침",
+            value=st.session_state.get('simulation_auto_refresh', False),
+            key="simulation_auto_refresh_checkbox",
+            help="시뮬레이션 실행 전에 데이터를 자동으로 새로고침합니다"
+        )
+    
+    # 새로고침 버튼 클릭 시 캐시 제거 및 새로고침
+    if refresh_clicked:
+        # 캐시된 데이터 제거
+        if 'preprocessed_data_cache' in st.session_state:
+            del st.session_state.preprocessed_data_cache
+        # 저장된 시뮬레이션 세션 관련 캐시 제거
+        cache_keys_to_remove = [key for key in st.session_state.keys() if 'simulation' in key.lower() and 'cache' in key.lower()]
+        for key in cache_keys_to_remove:
+            del st.session_state[key]
+        
+        st.session_state.simulation_auto_refresh = auto_refresh
+        st.success("✅ 데이터가 새로고침되었습니다.")
+        st.rerun()
+    
+    # 자동 새로고침 설정 저장
+    if auto_refresh != st.session_state.get('simulation_auto_refresh', False):
+        st.session_state.simulation_auto_refresh = auto_refresh
+    
     optimization_mode = st.radio(
         "최적화 모드",
         options=["단일 파라미터 최적화", "다차원 최적화"],
@@ -3759,7 +4201,7 @@ def main():
                             num_samples=num_samples,
                             method=method,
                             use_threshold=use_threshold,
-                            main_threshold=main_threshold if use_threshold else 60,
+                            main_threshold=main_threshold if use_threshold else 56,
                             progress_bar=progress_bar,
                             status_text=status_text,
                             enable_early_stop=enable_early_stop,
@@ -3775,7 +4217,7 @@ def main():
                                 window_size=window_size,
                                 method=method,
                                 use_threshold=use_threshold,
-                                main_threshold=main_threshold if use_threshold else 60,
+                                main_threshold=main_threshold if use_threshold else 56,
                                 max_interval=max_interval,
                                 min_skip_threshold=min_skip_threshold,
                                 max_skip_threshold=max_skip_threshold,
@@ -3792,7 +4234,7 @@ def main():
                                 window_size=window_size,
                                 method=method,
                                 use_threshold=use_threshold,
-                                main_threshold=main_threshold if use_threshold else 60,
+                                main_threshold=main_threshold if use_threshold else 56,
                                 max_interval=max_interval,
                                 min_skip_threshold=min_skip_threshold,
                                 max_skip_threshold=max_skip_threshold,
@@ -4575,16 +5017,22 @@ def main():
             for tab, window_size in [(tab5, 5), (tab6, 6), (tab7, 7), (tab8, 8)]:
                 with tab:
                     # 해당 윈도우 크기의 모든 prefix와 신뢰도를 신뢰도 높은 순으로 조회
+                    # ngram_chunks 테이블과 JOIN하여 빈도수도 함께 가져오기
                     query = """
                         SELECT 
-                            prefix,
-                            confidence,
-                            predicted_value,
-                            b_ratio,
-                            p_ratio
-                        FROM stored_predictions
-                        WHERE window_size = ?
-                        ORDER BY confidence DESC
+                            sp.prefix,
+                            sp.confidence,
+                            sp.predicted_value,
+                            sp.b_ratio,
+                            sp.p_ratio,
+                            COUNT(nc.id) as frequency
+                        FROM stored_predictions sp
+                        LEFT JOIN ngram_chunks nc 
+                            ON sp.window_size = nc.window_size 
+                            AND sp.prefix = nc.prefix
+                        WHERE sp.window_size = ?
+                        GROUP BY sp.prefix, sp.confidence, sp.predicted_value, sp.b_ratio, sp.p_ratio
+                        ORDER BY sp.confidence DESC
                     """
                     
                     df = pd.read_sql_query(query, conn, params=[window_size])
@@ -4597,6 +5045,7 @@ def main():
                                 '순위': idx + 1,
                                 'Prefix': row['prefix'],
                                 '신뢰도 (%)': f"{row['confidence']:.2f}",
+                                '빈도수': int(row['frequency']) if row['frequency'] is not None else 0,
                                 '예측값': row['predicted_value'],
                                 'B 비율': f"{row['b_ratio']:.2f}" if row['b_ratio'] is not None else "N/A",
                                 'P 비율': f"{row['p_ratio']:.2f}" if row['p_ratio'] is not None else "N/A"
@@ -4767,6 +5216,302 @@ def main():
             conn.close()
     else:
         st.error("⚠️ 데이터베이스 연결에 실패했습니다.")
+    
+    # 실시간 모델 vs stored_predictions 비교 섹션
+    st.markdown("---")
+    st.markdown("## 🔍 실시간 모델 vs stored_predictions 테이블 비교")
+    st.markdown("**실시간 모델로 생성한 예측값과 stored_predictions 테이블의 예측값을 비교합니다.**")
+    
+    def generate_realtime_predictions_table(cutoff_grid_string_id, window_sizes=[5, 6, 7, 8, 9], methods=["빈도 기반", "가중치 기반"], threshold=0):
+        """
+        실시간 모델로 예측 테이블 생성 (stored_predictions와 동일한 형식)
+        
+        Args:
+            cutoff_grid_string_id: 기준 grid_string_id (이 ID 이하를 학습 데이터로 사용)
+            window_sizes: 윈도우 크기 리스트
+            methods: 예측 방법 리스트
+            threshold: 임계값 (0은 임계값 없음)
+        
+        Returns:
+            list: [{window_size, prefix, predicted_value, confidence, b_ratio, p_ratio, method, threshold}, ...]
+        """
+        conn = get_db_connection()
+        if conn is None:
+            return []
+        
+        try:
+            # 학습 데이터 선택
+            if cutoff_grid_string_id is None:
+                query = "SELECT id FROM preprocessed_grid_strings ORDER BY id"
+                params = []
+            else:
+                query = "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id"
+                params = [cutoff_grid_string_id]
+            
+            df_historical = pd.read_sql_query(query, conn, params=params)
+            
+            if len(df_historical) == 0:
+                return []
+            
+            historical_ids = df_historical['id'].tolist()
+            predictions = []
+            
+            for window_size in window_sizes:
+                # 해당 윈도우 크기의 ngram_chunks 로드
+                train_ngrams = load_ngram_chunks(window_size=window_size, grid_string_ids=historical_ids)
+                
+                if len(train_ngrams) == 0:
+                    continue
+                
+                # 모든 가능한 prefix 추출
+                all_prefixes = set()
+                for _, row in train_ngrams.iterrows():
+                    all_prefixes.add(row['prefix'])
+                
+                # 각 방법으로 모델 구축 및 예측
+                for method in methods:
+                    # 모델 구축
+                    if method == "빈도 기반":
+                        model = build_frequency_model(train_ngrams)
+                    elif method == "가중치 기반":
+                        model = build_weighted_model(train_ngrams)
+                    else:
+                        model = build_frequency_model(train_ngrams)
+                    
+                    # 각 prefix에 대해 예측값 계산
+                    for prefix in all_prefixes:
+                        prediction_result = predict_for_prefix(model, prefix, method)
+                        
+                        predicted = prediction_result.get('predicted')
+                        ratios = prediction_result.get('ratios', {})
+                        confidence = prediction_result.get('confidence', 0.0)
+                        
+                        b_ratio = ratios.get('b', 0.0)
+                        p_ratio = ratios.get('p', 0.0)
+                        
+                        predictions.append({
+                            'window_size': window_size,
+                            'prefix': prefix,
+                            'predicted_value': predicted,
+                            'confidence': confidence,
+                            'b_ratio': b_ratio,
+                            'p_ratio': p_ratio,
+                            'method': method,
+                            'threshold': threshold
+                        })
+            
+            return predictions
+            
+        except Exception as e:
+            st.error(f"실시간 예측 테이블 생성 중 오류: {str(e)}")
+            return []
+        finally:
+            conn.close()
+    
+    # 비교 섹션 UI
+    with st.form("realtime_vs_stored_comparison_form", clear_on_submit=False):
+        st.markdown("### 비교 설정")
+        
+        col_comp1, col_comp2, col_comp3 = st.columns(3)
+        
+        with col_comp1:
+            # 기준 Grid String ID 선택
+            df_all_strings_comp = load_preprocessed_data()
+            if len(df_all_strings_comp) > 0:
+                grid_string_options_comp = []
+                for _, row in df_all_strings_comp.iterrows():
+                    grid_string_options_comp.append((row['id'], row['created_at']))
+                
+                grid_string_options_comp.sort(key=lambda x: x[0], reverse=True)
+                
+                selected_cutoff_id_comp = st.selectbox(
+                    "기준 Grid String ID (이 ID 이하를 학습 데이터로 사용)",
+                    options=[None] + [opt[0] for opt in grid_string_options_comp],
+                    format_func=lambda x: "전체 데이터" if x is None else next((f"ID {opt[0]} - {format_datetime_for_dropdown(opt[1])}" for opt in grid_string_options_comp if opt[0] == x), f"ID {x}"),
+                    key="comparison_cutoff_id"
+                )
+            else:
+                selected_cutoff_id_comp = None
+                st.warning("⚠️ 저장된 grid_string이 없습니다.")
+        
+        with col_comp2:
+            comparison_methods = st.multiselect(
+                "비교할 예측 방법",
+                options=["빈도 기반", "가중치 기반"],
+                default=["빈도 기반", "가중치 기반"],
+                key="comparison_methods"
+            )
+        
+        with col_comp3:
+            comparison_threshold = st.number_input(
+                "임계값",
+                min_value=0,
+                max_value=100,
+                value=0,
+                step=1,
+                key="comparison_threshold",
+                help="stored_predictions에서 조회할 임계값"
+            )
+        
+        if st.form_submit_button("🔍 비교 실행", type="primary", use_container_width=True):
+            if selected_cutoff_id_comp is None:
+                st.warning("⚠️ 기준 Grid String ID를 선택해주세요.")
+            elif len(comparison_methods) == 0:
+                st.warning("⚠️ 최소 하나의 예측 방법을 선택해주세요.")
+            else:
+                with st.spinner("실시간 모델로 예측 테이블 생성 중..."):
+                    # 실시간 모델로 예측 테이블 생성
+                    realtime_predictions = generate_realtime_predictions_table(
+                        cutoff_grid_string_id=selected_cutoff_id_comp,
+                        window_sizes=[5, 6, 7, 8, 9],
+                        methods=comparison_methods,
+                        threshold=0
+                    )
+                    
+                    st.session_state.realtime_predictions = realtime_predictions
+                    st.session_state.comparison_cutoff_id_saved = selected_cutoff_id_comp
+                    st.session_state.comparison_methods_saved = comparison_methods
+                    st.session_state.comparison_threshold_saved = comparison_threshold
+                    st.rerun()
+    
+    # 비교 결과 표시
+    if 'realtime_predictions' in st.session_state and st.session_state.realtime_predictions:
+        realtime_predictions = st.session_state.realtime_predictions
+        comparison_cutoff_id = st.session_state.get('comparison_cutoff_id_saved')
+        comparison_methods = st.session_state.get('comparison_methods_saved', [])
+        comparison_threshold = st.session_state.get('comparison_threshold_saved', 0)
+        
+        # stored_predictions 테이블에서 데이터 로드
+        conn = get_db_connection()
+        if conn is not None:
+            try:
+                # 윈도우 크기별, 방법별로 비교
+                for window_size in [5, 6, 7, 8, 9]:
+                    for method in comparison_methods:
+                        st.markdown(f"### 윈도우 크기 {window_size} - {method}")
+                        
+                        # 실시간 모델 데이터 필터링
+                        realtime_data = [
+                            p for p in realtime_predictions 
+                            if p['window_size'] == window_size and p['method'] == method
+                        ]
+                        
+                        if len(realtime_data) == 0:
+                            st.info(f"실시간 모델 데이터가 없습니다.")
+                            continue
+                        
+                        # stored_predictions 데이터 로드
+                        stored_query = """
+                            SELECT 
+                                prefix,
+                                predicted_value,
+                                confidence,
+                                b_ratio,
+                                p_ratio
+                            FROM stored_predictions
+                            WHERE window_size = ?
+                              AND method = ?
+                              AND threshold = ?
+                        """
+                        stored_df = pd.read_sql_query(stored_query, conn, params=[window_size, method, comparison_threshold])
+                        
+                        if len(stored_df) == 0:
+                            st.warning(f"stored_predictions에 데이터가 없습니다. (임계값: {comparison_threshold})")
+                            continue
+                        
+                        # 실시간 데이터를 DataFrame으로 변환
+                        realtime_df = pd.DataFrame(realtime_data)
+                        
+                        # 비교 데이터 생성
+                        comparison_data = []
+                        
+                        # 실시간 모델의 모든 prefix에 대해 비교
+                        for _, realtime_row in realtime_df.iterrows():
+                            prefix = realtime_row['prefix']
+                            stored_row = stored_df[stored_df['prefix'] == prefix]
+                            
+                            if len(stored_row) > 0:
+                                stored_row = stored_row.iloc[0]
+                                
+                                # 신뢰도 차이 계산
+                                confidence_diff = realtime_row['confidence'] - stored_row['confidence']
+                                
+                                # 예측값 일치 여부
+                                predicted_match = (realtime_row['predicted_value'] == stored_row['predicted_value'])
+                                
+                                comparison_data.append({
+                                    'Prefix': prefix,
+                                    '실시간 예측값': realtime_row['predicted_value'],
+                                    '저장된 예측값': stored_row['predicted_value'],
+                                    '예측값 일치': '✅' if predicted_match else '❌',
+                                    '실시간 신뢰도 (%)': f"{realtime_row['confidence']:.2f}",
+                                    '저장된 신뢰도 (%)': f"{stored_row['confidence']:.2f}",
+                                    '신뢰도 차이': f"{confidence_diff:+.2f}",
+                                    '실시간 B 비율 (%)': f"{realtime_row['b_ratio']:.2f}",
+                                    '저장된 B 비율 (%)': f"{stored_row['b_ratio']:.2f}" if pd.notna(stored_row['b_ratio']) else "N/A",
+                                    '실시간 P 비율 (%)': f"{realtime_row['p_ratio']:.2f}",
+                                    '저장된 P 비율 (%)': f"{stored_row['p_ratio']:.2f}" if pd.notna(stored_row['p_ratio']) else "N/A"
+                                })
+                        
+                        # 저장된 테이블에는 있지만 실시간 모델에는 없는 prefix
+                        realtime_prefixes = set(realtime_df['prefix'].tolist())
+                        stored_prefixes = set(stored_df['prefix'].tolist())
+                        only_in_stored = stored_prefixes - realtime_prefixes
+                        
+                        for prefix in only_in_stored:
+                            stored_row = stored_df[stored_df['prefix'] == prefix].iloc[0]
+                            comparison_data.append({
+                                'Prefix': prefix,
+                                '실시간 예측값': 'N/A',
+                                '저장된 예측값': stored_row['predicted_value'],
+                                '예측값 일치': '-',
+                                '실시간 신뢰도 (%)': 'N/A',
+                                '저장된 신뢰도 (%)': f"{stored_row['confidence']:.2f}",
+                                '신뢰도 차이': 'N/A',
+                                '실시간 B 비율 (%)': 'N/A',
+                                '저장된 B 비율 (%)': f"{stored_row['b_ratio']:.2f}" if pd.notna(stored_row['b_ratio']) else "N/A",
+                                '실시간 P 비율 (%)': 'N/A',
+                                '저장된 P 비율 (%)': f"{stored_row['p_ratio']:.2f}" if pd.notna(stored_row['p_ratio']) else "N/A"
+                            })
+                        
+                        if comparison_data:
+                            comparison_df = pd.DataFrame(comparison_data)
+                            
+                            # 통계 요약
+                            matched_count = sum(1 for d in comparison_data if d['예측값 일치'] == '✅')
+                            total_count = len([d for d in comparison_data if d['신뢰도 차이'] != 'N/A'])
+                            
+                            col_stat1, col_stat2, col_stat3 = st.columns(3)
+                            with col_stat1:
+                                st.metric("총 Prefix 수", len(comparison_data))
+                            with col_stat2:
+                                st.metric("예측값 일치", f"{matched_count}/{total_count}", f"{matched_count/total_count*100:.1f}%" if total_count > 0 else "0%")
+                            with col_stat3:
+                                if total_count > 0:
+                                    confidence_diffs = [float(d['신뢰도 차이'].replace('+', '')) for d in comparison_data if d['신뢰도 차이'] != 'N/A']
+                                    avg_diff = sum(confidence_diffs) / len(confidence_diffs)
+                                    st.metric("평균 신뢰도 차이", f"{avg_diff:+.2f}%")
+                            
+                            # 신뢰도 차이 순으로 정렬 (큰 차이부터)
+                            comparison_df_sorted = comparison_df.copy()
+                            comparison_df_sorted['신뢰도_차이_숫자'] = comparison_df_sorted['신뢰도 차이'].apply(
+                                lambda x: float(x.replace('+', '')) if x != 'N/A' else 0
+                            )
+                            comparison_df_sorted = comparison_df_sorted.sort_values('신뢰도_차이_숫자', key=abs, ascending=False)
+                            comparison_df_sorted = comparison_df_sorted.drop('신뢰도_차이_숫자', axis=1)
+                            
+                            st.dataframe(comparison_df_sorted, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("비교할 데이터가 없습니다.")
+                        
+                        st.markdown("---")
+                
+            except Exception as e:
+                st.error(f"비교 중 오류 발생: {str(e)}")
+                import traceback
+                st.error(f"상세 오류: {traceback.format_exc()}")
+            finally:
+                conn.close()
 
 if __name__ == "__main__":
     main()

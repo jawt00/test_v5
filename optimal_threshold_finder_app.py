@@ -1080,81 +1080,39 @@ def save_multi_dimensional_simulation_results(
         ))
         
         # 각 조합별 결과 저장
+        # 다차원 시뮬레이션에서는 같은 validation_id와 confidence_skip_threshold가 
+        # 다른 window_size, max_interval 조합에서 반복될 수 있으므로
+        # 기존 validation_id의 모든 레코드를 먼저 삭제하고 새로 저장
+        cursor.execute('DELETE FROM optimal_threshold_simulation_results WHERE validation_id = ?', (validation_id,))
+        
         for result in simulation_results.get('results', []):
-            # 기존 레코드 확인 (validation_id, confidence_skip_threshold, window_size, max_interval 조합)
+            # 새 레코드 삽입 (중복 체크 불필요, 위에서 이미 삭제했으므로)
             cursor.execute('''
-                SELECT id FROM optimal_threshold_simulation_results
-                WHERE validation_id = ? 
-                  AND confidence_skip_threshold = ?
-                  AND window_size = ?
-                  AND max_interval = ?
+                INSERT INTO optimal_threshold_simulation_results (
+                    validation_id, confidence_skip_threshold, window_size, max_interval,
+                    max_consecutive_failures, avg_max_consecutive_failures,
+                    total_skipped_predictions, avg_skip_rate,
+                    below_5_ratio, avg_accuracy, prediction_rate,
+                    total_grid_strings, total_steps, total_failures, total_predictions,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
             ''', (
                 validation_id,
                 result.get('confidence_skip_threshold'),
                 result.get('window_size'),
-                result.get('max_interval')
+                result.get('max_interval'),
+                result.get('max_consecutive_failures', 0),
+                result.get('avg_max_consecutive_failures', 0.0),
+                result.get('total_skipped_predictions', 0),
+                result.get('avg_skip_rate', 0.0),
+                result.get('below_5_ratio', 0.0),
+                result.get('avg_accuracy', 0.0),
+                result.get('prediction_rate', 0.0),
+                result.get('total_grid_strings', 0),
+                result.get('total_steps', 0),
+                result.get('total_failures', 0),
+                result.get('total_predictions', 0)
             ))
-            existing = cursor.fetchone()
-            
-            if existing:
-                # 기존 레코드 업데이트
-                cursor.execute('''
-                    UPDATE optimal_threshold_simulation_results SET
-                        max_consecutive_failures = ?,
-                        avg_max_consecutive_failures = ?,
-                        total_skipped_predictions = ?,
-                        avg_skip_rate = ?,
-                        below_5_ratio = ?,
-                        avg_accuracy = ?,
-                        prediction_rate = ?,
-                        total_grid_strings = ?,
-                        total_steps = ?,
-                        total_failures = ?,
-                        total_predictions = ?,
-                        created_at = datetime('now', '+9 hours')
-                    WHERE id = ?
-                ''', (
-                    result.get('max_consecutive_failures', 0),
-                    result.get('avg_max_consecutive_failures', 0.0),
-                    result.get('total_skipped_predictions', 0),
-                    result.get('avg_skip_rate', 0.0),
-                    result.get('below_5_ratio', 0.0),
-                    result.get('avg_accuracy', 0.0),
-                    result.get('prediction_rate', 0.0),
-                    result.get('total_grid_strings', 0),
-                    result.get('total_steps', 0),
-                    result.get('total_failures', 0),
-                    result.get('total_predictions', 0),
-                    existing[0]
-                ))
-            else:
-                # 새 레코드 삽입
-                cursor.execute('''
-                    INSERT INTO optimal_threshold_simulation_results (
-                        validation_id, confidence_skip_threshold, window_size, max_interval,
-                        max_consecutive_failures, avg_max_consecutive_failures,
-                        total_skipped_predictions, avg_skip_rate,
-                        below_5_ratio, avg_accuracy, prediction_rate,
-                        total_grid_strings, total_steps, total_failures, total_predictions,
-                        created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
-                ''', (
-                    validation_id,
-                    result.get('confidence_skip_threshold'),
-                    result.get('window_size'),
-                    result.get('max_interval'),
-                    result.get('max_consecutive_failures', 0),
-                    result.get('avg_max_consecutive_failures', 0.0),
-                    result.get('total_skipped_predictions', 0),
-                    result.get('avg_skip_rate', 0.0),
-                    result.get('below_5_ratio', 0.0),
-                    result.get('avg_accuracy', 0.0),
-                    result.get('prediction_rate', 0.0),
-                    result.get('total_grid_strings', 0),
-                    result.get('total_steps', 0),
-                    result.get('total_failures', 0),
-                    result.get('total_predictions', 0)
-                ))
         
         conn.commit()
         return validation_id

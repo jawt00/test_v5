@@ -70,16 +70,15 @@ git push origin master
 
 git checkout -b fix/training-validation-separation
 
+git push fix/training-validation-separation
 -------------------------
-예측값이 51.0 
-경계값에 있을때 스킵되는 경우가 있고 
-아닌 경우가 있어서 확인필요 
 
 
 윈도우 크기=8, 최대 간격=1, 임계값=53.0%
 
 윈도우 크기=8, 최대 간격=6, 임계값=53.5%
 
+윈도우 크기=8, 최대 간격=6, 임계값=52.8%
 
 
 streamlit run optimal_threshold_finder_app_parallel.py
@@ -91,5 +90,8 @@ Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz   2.90 GHz
 32.0GB(31.9GB 사용 가능)
 NVIDIA GeForce GTX 1070 
 
- 윈도우 크기=8, 최대 간격=8, 임계값=52.8%
-8 5 53 
+
+--------------------------------------------------
+
+streamlit run optimal_threshold_finder_app_parallel.py
+streamlit run live_game_app_parallel.py 

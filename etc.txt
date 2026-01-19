@@ -90,7 +90,7 @@ Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz   2.90 GHz
 32.0GB(31.9GB 사용 가능)
 NVIDIA GeForce GTX 1070 
 
-
+윈도우 크기=8, 최대 간격=5, 임계값=52.8%
 --------------------------------------------------
 
 streamlit run optimal_threshold_finder_app_parallel.py

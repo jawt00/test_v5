@@ -64,13 +64,11 @@ git push origin master
 ?  ?? 이? 을 ? 해 찾을 ??? 을지 고 ?? 서 계획??? 워 ?
 
 
--------------------------------
-           н      ͸  
- ùķ  ̼ ,    ̺   Ӱ       ϰ           
+-------------------------------   
 
 git checkout -b fix/training-validation-separation
 
-git push fix/training-validation-separation
+git push origin fix/training-validation-separation
 -------------------------
 
 
@@ -91,6 +89,8 @@ Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz   2.90 GHz
 NVIDIA GeForce GTX 1070 
 
 윈도우 크기=8, 최대 간격=5, 임계값=52.8%
+
+ 윈도우 크기=8, 최대 간격=6, 임계값=52.8%
 --------------------------------------------------
 
 streamlit run optimal_threshold_finder_app_parallel.py

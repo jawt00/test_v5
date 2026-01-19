@@ -8,7 +8,7 @@ import streamlit as st
 
 # 페이지 설정 (모든 import 전에 실행되어야 함)
 st.set_page_config(
-    page_title="Optimal Threshold Finder",
+    page_title="Optimal Threshold Finder (Parallel)",
     page_icon="🎯",
     layout="wide"
 )
@@ -100,7 +100,8 @@ def create_simulation_tables():
                 total_failures INTEGER NOT NULL,
                 total_predictions INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT (datetime('now', '+9 hours')),
-                FOREIGN KEY (validation_id) REFERENCES optimal_threshold_simulation_sessions(validation_id)
+                FOREIGN KEY (validation_id) REFERENCES optimal_threshold_simulation_sessions(validation_id),
+                UNIQUE(validation_id, confidence_skip_threshold, window_size, max_interval)
             )
         ''')
         
@@ -159,7 +160,7 @@ def create_simulation_tables():
             ON optimal_threshold_simulation_grid_results(confidence_skip_threshold)
         ''')
         
-        # 기존 테이블에 새 컬럼 추가 (마이그레이션)
+        # 기존 테이블에 새 컬럼 추가 및 UNIQUE 제약 조건 마이그레이션
         try:
             # 테이블 존재 여부 확인
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='optimal_threshold_simulation_sessions'")
@@ -206,6 +207,30 @@ def create_simulation_tables():
                             cursor.execute(f"ALTER TABLE optimal_threshold_simulation_results ADD COLUMN {col_name} {col_def}")
                         except sqlite3.OperationalError:
                             pass  # 무시
+                
+                # 기존 UNIQUE 인덱스 확인 및 제거 (있다면)
+                cursor.execute("""
+                    SELECT name FROM sqlite_master 
+                    WHERE type='index' 
+                    AND tbl_name='optimal_threshold_simulation_results'
+                    AND sql LIKE '%UNIQUE%'
+                """)
+                unique_indexes = cursor.fetchall()
+                for idx in unique_indexes:
+                    try:
+                        cursor.execute(f"DROP INDEX IF EXISTS {idx[0]}")
+                    except sqlite3.OperationalError:
+                        pass
+                
+                # 새로운 UNIQUE 제약 조건 추가 (4개 컬럼 조합)
+                try:
+                    cursor.execute("""
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_simulation_results_unique_combo
+                        ON optimal_threshold_simulation_results(validation_id, confidence_skip_threshold, window_size, max_interval)
+                    """)
+                except sqlite3.OperationalError:
+                    # 이미 존재하거나 실패해도 계속 진행
+                    pass
             
             conn.commit()
         except Exception as e:
@@ -1190,36 +1215,53 @@ def save_multi_dimensional_simulation_results(
         # 다차원 시뮬레이션에서는 같은 validation_id와 confidence_skip_threshold가 
         # 다른 window_size, max_interval 조합에서 반복될 수 있으므로
         # 기존 validation_id의 모든 레코드를 먼저 삭제하고 새로 저장
+        # (안전장치: INSERT OR REPLACE도 사용)
         cursor.execute('DELETE FROM optimal_threshold_simulation_results WHERE validation_id = ?', (validation_id,))
         
+        # 결과 저장 (중복 방지를 위해 INSERT OR REPLACE 사용)
         for result in simulation_results.get('results', []):
-            # 새 레코드 삽입 (중복 체크 불필요, 위에서 이미 삭제했으므로)
-            cursor.execute('''
-                INSERT INTO optimal_threshold_simulation_results (
-                    validation_id, confidence_skip_threshold, window_size, max_interval,
-                    max_consecutive_failures, avg_max_consecutive_failures,
-                    total_skipped_predictions, avg_skip_rate,
-                    below_5_ratio, avg_accuracy, prediction_rate,
-                    total_grid_strings, total_steps, total_failures, total_predictions,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
-            ''', (
-                validation_id,
-                result.get('confidence_skip_threshold'),
-                result.get('window_size'),
-                result.get('max_interval'),
-                result.get('max_consecutive_failures', 0),
-                result.get('avg_max_consecutive_failures', 0.0),
-                result.get('total_skipped_predictions', 0),
-                result.get('avg_skip_rate', 0.0),
-                result.get('below_5_ratio', 0.0),
-                result.get('avg_accuracy', 0.0),
-                result.get('prediction_rate', 0.0),
-                result.get('total_grid_strings', 0),
-                result.get('total_steps', 0),
-                result.get('total_failures', 0),
-                result.get('total_predictions', 0)
-            ))
+            # window_size와 max_interval이 None일 수 있으므로 처리
+            window_size_val = result.get('window_size')
+            max_interval_val = result.get('max_interval')
+            
+            # None 값을 기본값으로 처리 (다차원 최적화에서는 항상 값이 있어야 함)
+            if window_size_val is None:
+                window_size_val = default_window_size
+            if max_interval_val is None:
+                max_interval_val = default_max_interval
+            
+            try:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO optimal_threshold_simulation_results (
+                        validation_id, confidence_skip_threshold, window_size, max_interval,
+                        max_consecutive_failures, avg_max_consecutive_failures,
+                        total_skipped_predictions, avg_skip_rate,
+                        below_5_ratio, avg_accuracy, prediction_rate,
+                        total_grid_strings, total_steps, total_failures, total_predictions,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
+                ''', (
+                    validation_id,
+                    result.get('confidence_skip_threshold'),
+                    window_size_val,
+                    max_interval_val,
+                    result.get('max_consecutive_failures', 0),
+                    result.get('avg_max_consecutive_failures', 0.0),
+                    result.get('total_skipped_predictions', 0),
+                    result.get('avg_skip_rate', 0.0),
+                    result.get('below_5_ratio', 0.0),
+                    result.get('avg_accuracy', 0.0),
+                    result.get('prediction_rate', 0.0),
+                    result.get('total_grid_strings', 0),
+                    result.get('total_steps', 0),
+                    result.get('total_failures', 0),
+                    result.get('total_predictions', 0)
+                ))
+            except sqlite3.IntegrityError as e:
+                # UNIQUE 제약 조건 오류 발생 시 상세 정보 출력
+                st.warning(f"조합 저장 중 중복 오류 (무시하고 계속): validation_id={validation_id}, threshold={result.get('confidence_skip_threshold')}, window={window_size_val}, interval={max_interval_val}")
+                # 계속 진행
+                continue
         
         conn.commit()
         return validation_id
@@ -1571,6 +1613,11 @@ def load_simulation_session(validation_id):
                 min_skip_threshold,
                 max_skip_threshold,
                 step,
+                search_method,
+                window_size_min,
+                window_size_max,
+                max_interval_min,
+                max_interval_max,
                 created_at
             FROM optimal_threshold_simulation_sessions
             WHERE validation_id = ?
@@ -1583,9 +1630,12 @@ def load_simulation_session(validation_id):
         session_info = session_df.iloc[0].to_dict()
         
         # 최적 임계값 찾기 (5 이하인 것 중 가장 좋은 것)
+        # 다차원 최적화의 경우 window_size와 max_interval도 포함
         optimal_query = """
             SELECT 
                 confidence_skip_threshold,
+                window_size,
+                max_interval,
                 max_consecutive_failures,
                 below_5_ratio,
                 avg_accuracy,
@@ -1599,11 +1649,15 @@ def load_simulation_session(validation_id):
         
         if len(optimal_df) > 0:
             session_info['optimal_confidence_skip_threshold'] = optimal_df.iloc[0]['confidence_skip_threshold']
+            session_info['optimal_window_size'] = optimal_df.iloc[0].get('window_size')
+            session_info['optimal_max_interval'] = optimal_df.iloc[0].get('max_interval')
             session_info['optimal_max_consecutive_failures'] = optimal_df.iloc[0]['max_consecutive_failures']
             session_info['optimal_below_5_ratio'] = optimal_df.iloc[0]['below_5_ratio']
             session_info['optimal_avg_accuracy'] = optimal_df.iloc[0]['avg_accuracy']
         else:
             session_info['optimal_confidence_skip_threshold'] = None
+            session_info['optimal_window_size'] = None
+            session_info['optimal_max_interval'] = None
         
         return session_info
     except Exception as e:

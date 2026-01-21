@@ -1110,12 +1110,12 @@ def main():
                         optimal_confidence_skip = session_info.get('optimal_confidence_skip_threshold', 51.5)
                     
                     st.session_state.live_game_settings = {
-                        'window_size': optimal_window_size if optimal_window_size else session_info.get('window_size_min', 7),
+                        'window_size': int(optimal_window_size) if optimal_window_size else int(session_info.get('window_size_min', 7)),
                         'method': session_info['method'],
                         'use_threshold': bool(session_info['use_threshold']),
                         'threshold': session_info.get('threshold') if session_info.get('use_threshold') else None,
-                        'max_interval': optimal_max_interval if optimal_max_interval else session_info.get('max_interval_min', 4),
-                        'confidence_skip_threshold': optimal_confidence_skip if optimal_confidence_skip else 51.5,
+                        'max_interval': int(optimal_max_interval) if optimal_max_interval else int(session_info.get('max_interval_min', 4)),
+                        'confidence_skip_threshold': float(optimal_confidence_skip) if optimal_confidence_skip else 51.5,
                         'cutoff_id': session_info['cutoff_grid_string_id']
                     }
                     st.session_state.live_game_cutoff_id = session_info['cutoff_grid_string_id']
@@ -1265,12 +1265,12 @@ def main():
         with col_save1:
                 if st.button("💾 설정 저장", type="primary", use_container_width=True):
                     st.session_state.live_game_settings = {
-                        'window_size': live_window_size,
+                        'window_size': int(live_window_size),
                         'method': live_method,
                         'use_threshold': live_use_threshold,
                         'threshold': live_threshold,
-                        'max_interval': live_max_interval,
-                        'confidence_skip_threshold': live_confidence_skip_threshold,
+                        'max_interval': int(live_max_interval),
+                        'confidence_skip_threshold': float(live_confidence_skip_threshold),
                         'cutoff_id': live_cutoff_id
                     }
                     st.session_state.live_game_cutoff_id = live_cutoff_id
@@ -1310,8 +1310,8 @@ def main():
                 grid_string = live_grid_string.strip()
                 settings = st.session_state.live_game_settings
                 
-                if len(grid_string) < settings['window_size']:
-                    st.error(f"Grid String이 너무 짧습니다. (길이: {len(grid_string)}, 최소 필요: {settings['window_size']})")
+                if len(grid_string) < int(settings['window_size']):
+                    st.error(f"Grid String이 너무 짧습니다. (길이: {len(grid_string)}, 최소 필요: {int(settings['window_size'])})")
                 else:
                     # 게임 초기화
                     conn = get_db_connection()
@@ -1386,7 +1386,7 @@ def main():
                                     st.info(f"💡 입력한 grid_string이 DB에 있습니다 (ID: {existing_grid_string_id}). 학습 데이터에서 제외되었습니다.")
                                 
                                 # 게임 상태 초기화
-                                prefix_length = settings['window_size'] - 1
+                                prefix_length = int(settings['window_size']) - 1
                                 initial_prefix = grid_string[:prefix_length]
                                 
                                 # 입력된 grid_string 길이만큼 자동 실행

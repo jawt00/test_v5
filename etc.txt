@@ -68,6 +68,8 @@ git push origin master
 
 git checkout -b fix/training-validation-separation
 
+git pull origin fix/training-validation-separation
+
 git push origin fix/training-validation-separation
 -------------------------
 
@@ -119,3 +121,8 @@ streamlit run live_game_app_parallel.py
 
 N-gram 구조: $Input[i]$ (이전 줄의 마지막) + $Input[i+1...]$ (새로운 줄의 시작들)
 윈도우 크기는 7 8 9 10 
+
+
+윈도우 크기=7, 최대 간격=4, 임계값=52.1%
+윈도우 크기=8, 최대 간격=5, 임계값=52.3%
+윈도우 크기=8, 최대 간격=6, 임계값=52.0%

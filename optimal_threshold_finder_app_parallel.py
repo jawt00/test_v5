@@ -3600,12 +3600,12 @@ def display_multi_dimensional_results(simulation_results, optimal_result, cutoff
     with col_save1:
         if st.button("💾 결과 저장", type="primary", use_container_width=True, key="save_multi_dimensional"):
             # session_state에서 다차원 설정 가져오기
-            window_size_min = st.session_state.get('multi_window_size_min', 5)
-            window_size_max = st.session_state.get('multi_window_size_max', 9)
-            max_interval_min = st.session_state.get('multi_max_interval_min', 1)
-            max_interval_max = st.session_state.get('multi_max_interval_max', 20)
-            min_skip_threshold = st.session_state.get('multi_min_skip_threshold', 51.0)
-            max_skip_threshold = st.session_state.get('multi_max_skip_threshold', 53.5)
+            window_size_min = st.session_state.get('multi_window_size_min', 6)
+            window_size_max = st.session_state.get('multi_window_size_max', 8)
+            max_interval_min = st.session_state.get('multi_max_interval_min', 3)
+            max_interval_max = st.session_state.get('multi_max_interval_max', 6)
+            min_skip_threshold = st.session_state.get('multi_min_skip_threshold', 52.0)
+            max_skip_threshold = st.session_state.get('multi_max_skip_threshold', 53.0)
             threshold_step = st.session_state.get('multi_threshold_step', 0.1)
             num_samples = st.session_state.get('multi_num_samples', 100)
             
@@ -3963,7 +3963,7 @@ def main():
                     "최소 윈도우 크기",
                     min_value=5,
                     max_value=9,
-                    value=5,
+                    value=6,
                     step=1,
                     key="multi_window_size_min",
                     help="테스트할 최소 윈도우 크기"
@@ -3973,7 +3973,7 @@ def main():
                     "최대 윈도우 크기",
                     min_value=5,
                     max_value=9,
-                    value=9,
+                    value=8,
                     step=1,
                     key="multi_window_size_max",
                     help="테스트할 최대 윈도우 크기"
@@ -3987,7 +3987,7 @@ def main():
                     "최소 간격",
                     min_value=1,
                     max_value=20,
-                    value=1,
+                    value=3,
                     step=1,
                     key="multi_max_interval_min",
                     help="테스트할 최소 간격"
@@ -3997,7 +3997,7 @@ def main():
                     "최대 간격",
                     min_value=1,
                     max_value=20,
-                    value=20,
+                    value=6,
                     step=1,
                     key="multi_max_interval_max",
                     help="테스트할 최대 간격"
@@ -4011,7 +4011,7 @@ def main():
                     "최소 임계값 (%)",
                     min_value=0.0,
                     max_value=100.0,
-                    value=51.0,
+                    value=52.0,
                     step=0.1,
                     key="multi_min_skip_threshold",
                     help="테스트할 최소 스킵 임계값"
@@ -4021,7 +4021,7 @@ def main():
                     "최대 임계값 (%)",
                     min_value=0.0,
                     max_value=100.0,
-                    value=53.5,
+                    value=53.0,
                     step=0.1,
                     key="multi_max_skip_threshold",
                     help="테스트할 최대 스킵 임계값"
@@ -4086,7 +4086,7 @@ def main():
                     "작업자 수 (None이면 자동)",
                     min_value=1,
                     max_value=mp.cpu_count(),
-                    value=None,
+                    value=10,
                     step=1,
                     key="multi_max_workers",
                     help=f"병렬 작업자 수 (1-{mp.cpu_count()}개). None이면 자동 계산 (CPU의 50%만 사용하여 다른 작업 여유 확보)"
@@ -4313,12 +4313,12 @@ def main():
         
         # 다차원 모드 파라미터 가져오기
         if is_multi_dimensional:
-            window_size_min = st.session_state.get('multi_window_size_min', 5)
-            window_size_max = st.session_state.get('multi_window_size_max', 9)
-            max_interval_min = st.session_state.get('multi_max_interval_min', 1)
-            max_interval_max = st.session_state.get('multi_max_interval_max', 20)
-            min_skip_threshold = st.session_state.get('multi_min_skip_threshold', 51.0)
-            max_skip_threshold = st.session_state.get('multi_max_skip_threshold', 53.5)
+            window_size_min = st.session_state.get('multi_window_size_min', 6)
+            window_size_max = st.session_state.get('multi_window_size_max', 8)
+            max_interval_min = st.session_state.get('multi_max_interval_min', 3)
+            max_interval_max = st.session_state.get('multi_max_interval_max', 6)
+            min_skip_threshold = st.session_state.get('multi_min_skip_threshold', 52.0)
+            max_skip_threshold = st.session_state.get('multi_max_skip_threshold', 53.0)
             threshold_step = st.session_state.get('multi_threshold_step', 0.1)
             num_samples = st.session_state.get('multi_num_samples', 100)
         
@@ -4353,7 +4353,7 @@ def main():
                         enable_early_stop = st.session_state.get('multi_enable_early_stop', False)
                         min_meaningful_results = st.session_state.get('multi_min_meaningful_results', 5)
                         use_threading = st.session_state.get('multi_use_threading', False)
-                        max_workers = st.session_state.get('multi_max_workers', None)
+                        max_workers = st.session_state.get('multi_max_workers', 10)
                         # None이거나 0이면 자동 계산
                         if max_workers is not None and max_workers <= 0:
                             max_workers = None

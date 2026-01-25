@@ -132,5 +132,11 @@ N-gram 구조: $Input[i]$ (이전 줄의 마지막) + $Input[i+1...]$ (새로운
 윈도우 크기=8, 최대 간격=6, 임계값=52.0%
 윈도우 크기=8, 최대 간격=6, 임계값=52.2%
 
+윈도우 크기=8, 최대 간격=5, 임계값=52.2%  260125 1030 L6
+
+streamlit run change_point_simulation_app.py
+streamlit run live_game_change_point_app.py
+
+
 
 

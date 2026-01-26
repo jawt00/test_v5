@@ -140,9 +140,14 @@ streamlit run change_point_simulation_app.py
 streamlit run live_game_change_point_app.py
 
 streamlit run change_point_simulation_app.py
+streamlit run change_point_live_game_app.py
+
 
 git checkout change_point
 git pull origin change_point
+
+git push origin change_point
+
 
 8 52 60 
 9 52 60 
@@ -154,6 +159,7 @@ git pull origin change_point
 윈도우 크기=8, 임계값=59.0%
 
 
+
 새로운 가설이야 
 1. 학습데이터 설정하고 검증데이터만 검증하는 부분은 동일 
 2. 사용자가 선택한 윈도우크기와 임계점을 기준으로 검증 실행 
@@ -162,6 +168,8 @@ git pull origin change_point
 5. 앵커가 중첩되는 경우 이전 앵커를 우선 검증 
 6. 이전 앵커가 스킵인 경우는 예측값이 있는 앵커로 검증 
 
+
+윈도우 크기=10, 임계값=59.0%
 12 64 13%
 11 60
 10 56
@@ -177,4 +185,16 @@ git pull origin change_point
 10 57
 9 55 
 
+11 x 
+12 64 
+윈도우 크기=10, 임계값=59.0%
 
+
+bbbpbppbbbbpbpbbbpbppbbbpbbbpp
+
+bbbpbppbbbbp
+
+bppbbbppppbbp
+1 2 3 4 5 
+
+bpbpbbpbppbbpbppbpbbpbbbbpbbppbbbbppppbbpbpbb

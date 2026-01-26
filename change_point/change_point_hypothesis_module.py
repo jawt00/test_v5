@@ -464,8 +464,8 @@ class ThresholdSkipAnchorPriorityHypothesis(Hypothesis):
                     "skipped": True,
                 }
             
-            # 최고 신뢰도 선택
-            best = max(all_predictions, key=lambda x: x["confidence"])
+            # 가장 큰 윈도우 크기 선택 (문서 요구사항: 같은 앵커 내에서는 큰 윈도우 우선)
+            best = max(all_predictions, key=lambda x: x["window_size"])
             return {
                 "predicted": best["predicted"],
                 "confidence": best["confidence"],
@@ -488,6 +488,174 @@ class ThresholdSkipAnchorPriorityHypothesis(Hypothesis):
         return {}
 
 
+class ThresholdSkipAnchorPriorityExtendedHypothesis(Hypothesis):
+    """임계점 스킵 + 앵커 우선순위 확장 가설 - 기본 가설에 추가 조건 적용 가능"""
+    
+    def __init__(self, additional_condition=None):
+        """
+        Args:
+            additional_condition: 추가 조건 함수 (prediction_dict, actual_value) -> bool
+                                  True를 반환하면 예측을 사용, False면 스킵
+        """
+        self.additional_condition = additional_condition
+    
+    def predict(self, grid_string, position, window_sizes, method, threshold, anchor=None, window_thresholds=None, **kwargs):
+        """
+        특정 앵커와 윈도우 크기로 예측 수행
+        confidence >= threshold인 경우만 반환, 그렇지 않으면 스킵
+        추가 조건이 있으면 해당 조건도 확인
+        
+        Args:
+            anchor: 사용할 앵커 위치 (position 계산에 사용)
+            window_thresholds: 윈도우 크기별 임계값 딕셔너리 {window_size: threshold}
+        """
+        if anchor is None:
+            return {
+                "predicted": None,
+                "confidence": 0.0,
+                "window_size": None,
+                "prefix": None,
+                "all_predictions": [],
+                "skipped": True,
+            }
+        
+        # window_thresholds가 있으면 사용, 없으면 threshold를 모든 윈도우에 적용
+        if window_thresholds is None:
+            window_thresholds = {ws: threshold for ws in window_sizes}
+        
+        conn = get_change_point_db_connection()
+        try:
+            all_predictions = []
+            all_attempts_debug = []  # 디버깅용: 모든 시도 기록
+            for window_size in window_sizes:
+                # 해당 윈도우 크기의 임계값 가져오기
+                ws_threshold = window_thresholds.get(window_size, threshold)
+                
+                # 예측할 위치는 anchor + window_size - 1
+                expected_pos = anchor + window_size - 1
+                if expected_pos != position:
+                    continue
+                
+                # prefix 계산: position에서 prefix_len만큼 앞부분 추출
+                prefix_len = window_size - 1
+                if position < prefix_len:
+                    all_attempts_debug.append({
+                        "window_size": window_size,
+                        "prefix": None,
+                        "predicted": None,
+                        "confidence": 0.0,
+                        "reason": "prefix 길이 부족"
+                    })
+                    continue
+                
+                if position > len(grid_string):
+                    all_attempts_debug.append({
+                        "window_size": window_size,
+                        "prefix": None,
+                        "predicted": None,
+                        "confidence": 0.0,
+                        "reason": "position 범위 초과"
+                    })
+                    continue
+                
+                prefix = grid_string[position - prefix_len : position]
+                q = """
+                    SELECT predicted_value, confidence, b_ratio, p_ratio
+                    FROM stored_predictions_change_point
+                    WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
+                    LIMIT 1
+                """
+                df = pd.read_sql_query(q, conn, params=[window_size, prefix, method, 0])
+                if len(df) == 0:
+                    all_attempts_debug.append({
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": None,
+                        "confidence": 0.0,
+                        "reason": "DB에 예측값 없음"
+                    })
+                    continue
+                row = df.iloc[0]
+                conf = row["confidence"]
+                
+                # 윈도우별 임계점 미만이면 스킵
+                if conf < ws_threshold:
+                    all_attempts_debug.append({
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": row["predicted_value"],
+                        "confidence": conf,
+                        "reason": f"임계값 미만 ({conf:.1f}% < {ws_threshold}%)"
+                    })
+                    continue
+                
+                # 추가 조건 확인
+                prediction_dict = {
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": row["predicted_value"],
+                    "confidence": conf,
+                    "b_ratio": row["b_ratio"],
+                    "p_ratio": row["p_ratio"],
+                }
+                
+                # 추가 조건이 있고 조건을 만족하지 않으면 스킵
+                if self.additional_condition is not None:
+                    actual_value = grid_string[position] if position < len(grid_string) else None
+                    if not self.additional_condition(prediction_dict, actual_value):
+                        all_attempts_debug.append({
+                            "window_size": window_size,
+                            "prefix": prefix,
+                            "predicted": row["predicted_value"],
+                            "confidence": conf,
+                            "reason": "추가 조건 불만족"
+                        })
+                        continue
+                
+                all_predictions.append(prediction_dict)
+                all_attempts_debug.append({
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": row["predicted_value"],
+                    "confidence": conf,
+                    "reason": "성공"
+                })
+            
+            if not all_predictions:
+                return {
+                    "predicted": None,
+                    "confidence": 0.0,
+                    "window_size": None,
+                    "prefix": None,
+                    "all_predictions": [],
+                    "all_attempts_debug": all_attempts_debug,
+                    "skipped": True,
+                }
+            
+            # 가장 큰 윈도우 크기 선택
+            best = max(all_predictions, key=lambda x: x["window_size"])
+            return {
+                "predicted": best["predicted"],
+                "confidence": best["confidence"],
+                "window_size": best["window_size"],
+                "prefix": best["prefix"],
+                "all_predictions": all_predictions,
+                "all_attempts_debug": all_attempts_debug,
+                "skipped": False,
+            }
+        finally:
+            conn.close()
+    
+    def get_name(self):
+        return "임계점 스킵 + 앵커 우선순위 (확장)"
+    
+    def get_description(self):
+        return "임계점 스킵 + 앵커 우선순위 가설에 추가 조건을 적용할 수 있는 확장 버전입니다."
+    
+    def get_config_schema(self):
+        return {}
+
+
 # ============================================================================
 # 가설 등록
 # ============================================================================
@@ -496,6 +664,7 @@ register_hypothesis("best_confidence", BestConfidenceHypothesis)
 register_hypothesis("confidence_skip", ConfidenceSkipHypothesis)
 register_hypothesis("large_window_only", LargeWindowOnlyHypothesis)
 register_hypothesis("threshold_skip_anchor_priority", ThresholdSkipAnchorPriorityHypothesis)
+register_hypothesis("threshold_skip_anchor_priority_extended", ThresholdSkipAnchorPriorityExtendedHypothesis)
 
 
 # ============================================================================
@@ -509,6 +678,7 @@ def validate_hypothesis_cp(
     window_sizes=(5, 6, 7, 8, 9),
     method="빈도 기반",
     threshold=0,
+    stop_on_match=False,
     **hypothesis_params
 ):
     """
@@ -521,6 +691,7 @@ def validate_hypothesis_cp(
         window_sizes: 윈도우 크기 목록
         method: 예측 방법
         threshold: 임계값
+        stop_on_match: True이면 일치하는 결과가 나오면 검증 종료
         **hypothesis_params: 가설별 추가 파라미터
         
     Returns:
@@ -547,6 +718,7 @@ def validate_hypothesis_cp(
                 "total_skipped": 0,
                 "accuracy": 0.0,
                 "history": [],
+                "stopped_early": False,
             }
         
         # Change-point Detection: 앵커 위치 수집
@@ -569,6 +741,7 @@ def validate_hypothesis_cp(
                 "total_skipped": 0,
                 "accuracy": 0.0,
                 "history": [],
+                "stopped_early": False,
             }
         
         # 첫 번째 앵커만 사용
@@ -582,6 +755,7 @@ def validate_hypothesis_cp(
         total_failures = 0
         total_predictions = 0
         total_skipped = 0
+        stopped_early = False
         
         # 첫 번째 앵커에서 각 윈도우 크기별로 예측 수행
         # 앵커는 고정된 상태에서 윈도우 크기 8,9,10,11,12 모두 검증
@@ -635,6 +809,11 @@ def validate_hypothesis_cp(
                         "all_predictions": all_preds,
                         "skipped": False,
                     })
+                    
+                    # 일치하는 결과가 나오면 검증 종료
+                    if stop_on_match and ok:
+                        stopped_early = True
+                        break
                 else:
                     if skipped:
                         total_skipped += 1
@@ -652,6 +831,10 @@ def validate_hypothesis_cp(
                         "all_predictions": [],
                         "skipped": skipped,
                     })
+            
+            # early exit 체크
+            if stopped_early:
+                break
         
         acc = ((total_predictions - total_failures) / total_predictions * 100) if total_predictions > 0 else 0.0
         return {
@@ -663,6 +846,7 @@ def validate_hypothesis_cp(
             "total_skipped": total_skipped,
             "accuracy": acc,
             "history": history,
+            "stopped_early": stopped_early,
         }
     finally:
         conn.close()
@@ -674,6 +858,8 @@ def batch_validate_hypothesis_cp(
     window_sizes=(5, 6, 7, 8, 9),
     method="빈도 기반",
     threshold=0,
+    train_ratio=None,
+    stop_on_match=False,
     **hypothesis_params
 ):
     """
@@ -685,13 +871,17 @@ def batch_validate_hypothesis_cp(
         window_sizes: 윈도우 크기 목록
         method: 예측 방법
         threshold: 임계값
+        train_ratio: 학습 데이터 비율 (0.0 ~ 1.0, 예: 0.6 = 60% 학습 / 40% 검증)
+                    None이면 cutoff 이후 모든 데이터 검증
+        stop_on_match: True이면 각 grid_string 검증 중 일치하는 결과가 나오면 종료
         **hypothesis_params: 가설별 추가 파라미터
         
     Returns:
         dict: {
             "results": 검증 결과 목록,
             "summary": 요약 통계,
-            "grid_string_ids": 검증된 grid_string ID 목록
+            "grid_string_ids": 검증된 grid_string ID 목록,
+            "train_grid_string_ids": 학습용 grid_string ID 목록 (train_ratio가 설정된 경우)
         }
     """
     conn = get_change_point_db_connection()
@@ -715,16 +905,28 @@ def batch_validate_hypothesis_cp(
                     "total_skipped": 0,
                 },
                 "grid_string_ids": [],
+                "train_grid_string_ids": [],
             }
-        gids = df["id"].tolist()
+        all_gids = df["id"].tolist()
+        
+        # 학습 비율이 설정된 경우 데이터 분할
+        if train_ratio is not None and 0.0 < train_ratio < 1.0:
+            split_idx = int(len(all_gids) * train_ratio)
+            train_gids = all_gids[:split_idx]
+            test_gids = all_gids[split_idx:]
+        else:
+            train_gids = []
+            test_gids = all_gids
+        
         results = []
-        for gid in gids:
+        for gid in test_gids:
             r = validate_hypothesis_cp(
                 gid, cutoff_grid_string_id,
                 hypothesis=hypothesis,
                 window_sizes=window_sizes, 
                 method=method, 
                 threshold=threshold,
+                stop_on_match=stop_on_match,
                 **hypothesis_params
             )
             if r is not None:
@@ -752,8 +954,14 @@ def batch_validate_hypothesis_cp(
                 "total_failures": sum(x["total_failures"] for x in results),
                 "total_predictions": sum(x["total_predictions"] for x in results),
                 "total_skipped": sum(x.get("total_skipped", 0) for x in results),
+                "total_stopped_early": sum(1 for x in results if x.get("stopped_early", False)),
             }
-        return {"results": results, "summary": summary, "grid_string_ids": gids}
+        return {
+            "results": results,
+            "summary": summary,
+            "grid_string_ids": test_gids,
+            "train_grid_string_ids": train_gids,
+        }
     finally:
         conn.close()
 
@@ -765,6 +973,7 @@ def validate_threshold_skip_anchor_priority_cp(
     method="빈도 기반",
     threshold=50,
     window_thresholds=None,
+    stop_on_match=False,
 ):
     """
     임계점 스킵 + 앵커 우선순위 검증 함수
@@ -780,6 +989,7 @@ def validate_threshold_skip_anchor_priority_cp(
         method: 예측 방법
         threshold: 기본 임계값 (window_thresholds가 없을 때 사용)
         window_thresholds: 윈도우 크기별 임계값 딕셔너리 {window_size: threshold}
+        stop_on_match: True이면 일치하는 결과가 나오면 검증 종료
         
     Returns:
         dict: 검증 결과
@@ -805,6 +1015,7 @@ def validate_threshold_skip_anchor_priority_cp(
                 "total_skipped": 0,
                 "accuracy": 0.0,
                 "history": [],
+                "stopped_early": False,
             }
         
         # Change-point Detection: 앵커 위치 수집
@@ -824,6 +1035,7 @@ def validate_threshold_skip_anchor_priority_cp(
                 "total_skipped": 0,
                 "accuracy": 0.0,
                 "history": [],
+                "stopped_early": False,
             }
         
         hypothesis = ThresholdSkipAnchorPriorityHypothesis()
@@ -834,6 +1046,7 @@ def validate_threshold_skip_anchor_priority_cp(
         total_failures = 0
         total_predictions = 0
         total_skipped = 0
+        stopped_early = False
         
         # 각 position에서 예측 시도 (max_ws부터 끝까지)
         for position in range(max_ws - 1, len(grid_string)):
@@ -914,6 +1127,11 @@ def validate_threshold_skip_anchor_priority_cp(
                     "skipped": False,
                     "all_anchor_attempts": all_attempts,
                 })
+                
+                # 일치하는 결과가 나오면 검증 종료
+                if stop_on_match and ok:
+                    stopped_early = True
+                    break
             else:
                 # 모든 앵커가 스킵됨
                 total_skipped += 1
@@ -932,6 +1150,10 @@ def validate_threshold_skip_anchor_priority_cp(
                     "skipped": True,
                     "all_anchor_attempts": all_attempts,
                 })
+            
+            # early exit 체크
+            if stopped_early:
+                break
         
         acc = ((total_predictions - total_failures) / total_predictions * 100) if total_predictions > 0 else 0.0
         return {
@@ -943,6 +1165,215 @@ def validate_threshold_skip_anchor_priority_cp(
             "total_skipped": total_skipped,
             "accuracy": acc,
             "history": history,
+            "stopped_early": stopped_early,
+        }
+    finally:
+        conn.close()
+
+
+def validate_threshold_skip_anchor_priority_extended_cp(
+    grid_string_id,
+    cutoff_grid_string_id,
+    window_sizes=(8, 9, 10, 11, 12),
+    method="빈도 기반",
+    threshold=50,
+    window_thresholds=None,
+    stop_on_match=False,
+    additional_condition=None,
+):
+    """
+    임계점 스킵 + 앵커 우선순위 확장 검증 함수
+    
+    - 모든 앵커에서 검증
+    - 각 position에서 예측할 때, 가능한 모든 앵커를 이전 앵커부터 순서대로 시도
+    - 이전 앵커가 스킵되면 예측값이 있는 다음 앵커로 검증
+    - 추가 조건 적용 가능
+    
+    Args:
+        grid_string_id: 검증할 grid_string ID
+        cutoff_grid_string_id: cutoff ID (사용하지 않지만 호환성을 위해 유지)
+        window_sizes: 윈도우 크기 목록
+        method: 예측 방법
+        threshold: 기본 임계값 (window_thresholds가 없을 때 사용)
+        window_thresholds: 윈도우 크기별 임계값 딕셔너리 {window_size: threshold}
+        stop_on_match: True이면 일치하는 결과가 나오면 검증 종료
+        additional_condition: 추가 조건 함수 (prediction_dict, actual_value) -> bool
+        
+    Returns:
+        dict: 검증 결과
+    """
+    conn = get_change_point_db_connection()
+    try:
+        df = pd.read_sql_query(
+            "SELECT grid_string FROM preprocessed_grid_strings WHERE id = ?",
+            conn,
+            params=[grid_string_id],
+        )
+        if len(df) == 0:
+            return None
+        grid_string = df.iloc[0]["grid_string"]
+        max_ws = max(window_sizes)
+        if len(grid_string) < max_ws:
+            return {
+                "grid_string_id": grid_string_id,
+                "max_consecutive_failures": 0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+                "accuracy": 0.0,
+                "history": [],
+                "stopped_early": False,
+            }
+        
+        # Change-point Detection: 앵커 위치 수집
+        anchors = []
+        for i in range(len(grid_string) - 1):
+            if grid_string[i] != grid_string[i+1]:
+                anchors.append(i)
+        anchors = sorted(list(set(anchors)))
+        
+        if not anchors:
+            return {
+                "grid_string_id": grid_string_id,
+                "max_consecutive_failures": 0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+                "accuracy": 0.0,
+                "history": [],
+                "stopped_early": False,
+            }
+        
+        hypothesis = ThresholdSkipAnchorPriorityExtendedHypothesis(additional_condition=additional_condition)
+        history = []
+        consecutive_failures = 0
+        max_consecutive_failures = 0
+        total_steps = 0
+        total_failures = 0
+        total_predictions = 0
+        total_skipped = 0
+        stopped_early = False
+        
+        # 각 position에서 예측 시도 (max_ws부터 끝까지)
+        for position in range(max_ws - 1, len(grid_string)):
+            actual = grid_string[position]
+            total_steps += 1
+            
+            # 해당 position에 도달할 수 있는 모든 앵커 찾기
+            # anchor + window_size - 1 == position이 되는 앵커들
+            possible_anchors = []
+            for anchor in anchors:
+                for window_size in window_sizes:
+                    if anchor + window_size - 1 == position:
+                        if anchor not in possible_anchors:
+                            possible_anchors.append(anchor)
+                        break
+            
+            # 앵커를 이전 앵커부터 순서대로 시도
+            possible_anchors = sorted(possible_anchors)
+            
+            pred_result = None
+            used_anchor = None
+            used_window_size = None
+            used_prefix = None
+            all_attempts = []
+            
+            # 각 앵커를 순서대로 시도
+            for anchor in possible_anchors:
+                pred_res = hypothesis.predict(
+                    grid_string, position, window_sizes=window_sizes,
+                    method=method, threshold=threshold, anchor=anchor,
+                    window_thresholds=window_thresholds
+                )
+                
+                all_attempts.append({
+                    "anchor": anchor,
+                    "skipped": pred_res.get("skipped", False),
+                    "confidence": pred_res.get("confidence", 0.0),
+                    "predicted": pred_res.get("predicted"),
+                    "window_size": pred_res.get("window_size"),
+                    "all_predictions": pred_res.get("all_predictions", []),
+                })
+                
+                # 예측값이 있고 스킵되지 않았으면 사용
+                if pred_res.get("predicted") is not None and not pred_res.get("skipped", False):
+                    pred_result = pred_res
+                    used_anchor = anchor
+                    used_window_size = pred_res.get("window_size")
+                    used_prefix = pred_res.get("prefix")
+                    break  # 예측 성공, 다음 position으로
+            
+            # 예측 결과 처리
+            if pred_result and pred_result.get("predicted") is not None:
+                pred = pred_result.get("predicted")
+                conf = pred_result.get("confidence", 0.0)
+                ok = pred == actual
+                total_predictions += 1
+                
+                if not ok:
+                    consecutive_failures += 1
+                    total_failures += 1
+                    if consecutive_failures > max_consecutive_failures:
+                        max_consecutive_failures = consecutive_failures
+                else:
+                    consecutive_failures = 0
+                
+                history.append({
+                    "step": total_steps,
+                    "position": position,
+                    "anchor": used_anchor,
+                    "window_size": used_window_size,
+                    "prefix": used_prefix,
+                    "predicted": pred,
+                    "actual": actual,
+                    "is_correct": ok,
+                    "confidence": conf,
+                    "selected_window_size": used_window_size,
+                    "all_predictions": pred_result.get("all_predictions", []),
+                    "skipped": False,
+                    "all_anchor_attempts": all_attempts,
+                })
+                
+                # 일치하는 결과가 나오면 검증 종료
+                if stop_on_match and ok:
+                    stopped_early = True
+                    break
+            else:
+                # 모든 앵커가 스킵됨
+                total_skipped += 1
+                history.append({
+                    "step": total_steps,
+                    "position": position,
+                    "anchor": None,
+                    "window_size": None,
+                    "prefix": None,
+                    "predicted": None,
+                    "actual": actual,
+                    "is_correct": None,
+                    "confidence": 0.0,
+                    "selected_window_size": None,
+                    "all_predictions": [],
+                    "skipped": True,
+                    "all_anchor_attempts": all_attempts,
+                })
+            
+            # early exit 체크
+            if stopped_early:
+                break
+        
+        acc = ((total_predictions - total_failures) / total_predictions * 100) if total_predictions > 0 else 0.0
+        return {
+            "grid_string_id": grid_string_id,
+            "max_consecutive_failures": max_consecutive_failures,
+            "total_steps": total_steps,
+            "total_failures": total_failures,
+            "total_predictions": total_predictions,
+            "total_skipped": total_skipped,
+            "accuracy": acc,
+            "history": history,
+            "stopped_early": stopped_early,
         }
     finally:
         conn.close()
@@ -954,6 +1385,8 @@ def batch_validate_threshold_skip_anchor_priority_cp(
     method="빈도 기반",
     threshold=50,
     window_thresholds=None,
+    train_ratio=None,
+    stop_on_match=False,
 ):
     """
     임계점 스킵 + 앵커 우선순위 배치 검증 (cutoff 이후 grid_string)
@@ -964,12 +1397,16 @@ def batch_validate_threshold_skip_anchor_priority_cp(
         method: 예측 방법
         threshold: 기본 임계값 (window_thresholds가 없을 때 사용)
         window_thresholds: 윈도우 크기별 임계값 딕셔너리 {window_size: threshold}
+        train_ratio: 학습 데이터 비율 (0.0 ~ 1.0, 예: 0.6 = 60% 학습 / 40% 검증)
+                    None이면 cutoff 이후 모든 데이터 검증
+        stop_on_match: True이면 각 grid_string 검증 중 일치하는 결과가 나오면 종료
         
     Returns:
         dict: {
             "results": 검증 결과 목록,
             "summary": 요약 통계,
-            "grid_string_ids": 검증된 grid_string ID 목록
+            "grid_string_ids": 검증된 grid_string ID 목록,
+            "train_grid_string_ids": 학습용 grid_string ID 목록 (train_ratio가 설정된 경우)
         }
     """
     conn = get_change_point_db_connection()
@@ -993,12 +1430,23 @@ def batch_validate_threshold_skip_anchor_priority_cp(
                     "total_skipped": 0,
                 },
                 "grid_string_ids": [],
+                "train_grid_string_ids": [],
             }
-        gids = df["id"].tolist()
+        all_gids = df["id"].tolist()
+        
+        # 학습 비율이 설정된 경우 데이터 분할
+        if train_ratio is not None and 0.0 < train_ratio < 1.0:
+            split_idx = int(len(all_gids) * train_ratio)
+            train_gids = all_gids[:split_idx]
+            test_gids = all_gids[split_idx:]
+        else:
+            train_gids = []
+            test_gids = all_gids
+        
         results = []
-        for gid in gids:
+        for gid in test_gids:
             res = validate_threshold_skip_anchor_priority_cp(
-                gid, cutoff_grid_string_id, window_sizes, method, threshold, window_thresholds
+                gid, cutoff_grid_string_id, window_sizes, method, threshold, window_thresholds, stop_on_match
             )
             if res:
                 results.append(res)
@@ -1024,7 +1472,224 @@ def batch_validate_threshold_skip_anchor_priority_cp(
                 "total_failures": sum(x["total_failures"] for x in results),
                 "total_predictions": sum(x["total_predictions"] for x in results),
                 "total_skipped": sum(x.get("total_skipped", 0) for x in results),
+                "total_stopped_early": sum(1 for x in results if x.get("stopped_early", False)),
             }
-        return {"results": results, "summary": summary, "grid_string_ids": gids}
+        return {
+            "results": results,
+            "summary": summary,
+            "grid_string_ids": test_gids,
+            "train_grid_string_ids": train_gids,
+        }
     finally:
         conn.close()
+
+
+def batch_validate_threshold_skip_anchor_priority_extended_cp(
+    cutoff_grid_string_id,
+    window_sizes=(8, 9, 10, 11, 12),
+    method="빈도 기반",
+    threshold=50,
+    window_thresholds=None,
+    train_ratio=None,
+    stop_on_match=False,
+    additional_condition=None,
+):
+    """
+    임계점 스킵 + 앵커 우선순위 확장 배치 검증 (cutoff 이후 grid_string)
+    
+    Args:
+        cutoff_grid_string_id: cutoff ID (이 ID 이후 검증)
+        window_sizes: 윈도우 크기 목록
+        method: 예측 방법
+        threshold: 기본 임계값 (window_thresholds가 없을 때 사용)
+        window_thresholds: 윈도우 크기별 임계값 딕셔너리 {window_size: threshold}
+        train_ratio: 학습 데이터 비율 (0.0 ~ 1.0, 예: 0.6 = 60% 학습 / 40% 검증)
+                    None이면 cutoff 이후 모든 데이터 검증
+        stop_on_match: True이면 각 grid_string 검증 중 일치하는 결과가 나오면 종료
+        additional_condition: 추가 조건 함수 (prediction_dict, actual_value) -> bool
+        
+    Returns:
+        dict: {
+            "results": 검증 결과 목록,
+            "summary": 요약 통계,
+            "grid_string_ids": 검증된 grid_string ID 목록,
+            "train_grid_string_ids": 학습용 grid_string ID 목록 (train_ratio가 설정된 경우)
+        }
+    """
+    conn = get_change_point_db_connection()
+    try:
+        df = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id > ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        if len(df) == 0:
+            return {
+                "results": [],
+                "summary": {
+                    "total_grid_strings": 0,
+                    "avg_accuracy": 0.0,
+                    "max_consecutive_failures": 0,
+                    "avg_max_consecutive_failures": 0.0,
+                    "total_steps": 0,
+                    "total_failures": 0,
+                    "total_predictions": 0,
+                    "total_skipped": 0,
+                },
+                "grid_string_ids": [],
+                "train_grid_string_ids": [],
+            }
+        all_gids = df["id"].tolist()
+        
+        # 학습 비율이 설정된 경우 데이터 분할
+        if train_ratio is not None and 0.0 < train_ratio < 1.0:
+            split_idx = int(len(all_gids) * train_ratio)
+            train_gids = all_gids[:split_idx]
+            test_gids = all_gids[split_idx:]
+        else:
+            train_gids = []
+            test_gids = all_gids
+        
+        results = []
+        for gid in test_gids:
+            res = validate_threshold_skip_anchor_priority_extended_cp(
+                gid, cutoff_grid_string_id, window_sizes, method, threshold, window_thresholds, stop_on_match, additional_condition
+            )
+            if res:
+                results.append(res)
+        
+        if not results:
+            summary = {
+                "total_grid_strings": 0,
+                "avg_accuracy": 0.0,
+                "max_consecutive_failures": 0,
+                "avg_max_consecutive_failures": 0.0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+            }
+        else:
+            summary = {
+                "total_grid_strings": len(results),
+                "avg_accuracy": sum(x["accuracy"] for x in results) / len(results),
+                "max_consecutive_failures": max(x["max_consecutive_failures"] for x in results),
+                "avg_max_consecutive_failures": sum(x["max_consecutive_failures"] for x in results) / len(results),
+                "total_steps": sum(x["total_steps"] for x in results),
+                "total_failures": sum(x["total_failures"] for x in results),
+                "total_predictions": sum(x["total_predictions"] for x in results),
+                "total_skipped": sum(x.get("total_skipped", 0) for x in results),
+                "total_stopped_early": sum(1 for x in results if x.get("stopped_early", False)),
+            }
+        return {
+            "results": results,
+            "summary": summary,
+            "grid_string_ids": test_gids,
+            "train_grid_string_ids": train_gids,
+        }
+    finally:
+        conn.close()
+
+
+def batch_validate_multiple_train_ratios(
+    cutoff_grid_string_id,
+    hypothesis,
+    window_sizes=(5, 6, 7, 8, 9),
+    method="빈도 기반",
+    threshold=0,
+    start_train_ratio=0.6,
+    step_train_ratio=0.05,
+    max_train_ratio=0.95,
+    stop_on_match=False,
+    window_thresholds=None,
+    additional_condition=None,
+    **hypothesis_params
+):
+    """
+    여러 학습 비율로 배치 검증 수행
+    
+    Args:
+        cutoff_grid_string_id: cutoff ID (이 ID 이후 검증)
+        hypothesis: Hypothesis 인스턴스 (또는 가설 이름 문자열)
+        window_sizes: 윈도우 크기 목록
+        method: 예측 방법
+        threshold: 기본 임계값
+        start_train_ratio: 시작 학습 비율 (예: 0.6 = 60%)
+        step_train_ratio: 학습 비율 간격 (예: 0.05 = 5%)
+        max_train_ratio: 최대 학습 비율 (예: 0.95 = 95%)
+        stop_on_match: True이면 각 grid_string 검증 중 일치하는 결과가 나오면 종료
+        window_thresholds: 윈도우 크기별 임계값 딕셔너리 {window_size: threshold} (threshold_skip 가설용)
+        additional_condition: 추가 조건 함수 (확장 가설용)
+        **hypothesis_params: 가설별 추가 파라미터
+        
+    Returns:
+        dict: {
+            "train_ratios": 학습 비율 목록,
+            "results_by_ratio": {train_ratio: 검증 결과} 딕셔너리,
+            "summary_by_ratio": {train_ratio: 요약 통계} 딕셔너리
+        }
+    """
+    # 학습 비율 목록 생성
+    train_ratios = []
+    current_ratio = start_train_ratio
+    while current_ratio <= max_train_ratio:
+        train_ratios.append(round(current_ratio, 2))
+        current_ratio += step_train_ratio
+    
+    results_by_ratio = {}
+    summary_by_ratio = {}
+    
+    # 가설 이름이 문자열인 경우 인스턴스로 변환
+    if isinstance(hypothesis, str):
+        if hypothesis == "threshold_skip_anchor_priority_extended":
+            hypothesis_instance = ThresholdSkipAnchorPriorityExtendedHypothesis(additional_condition=additional_condition)
+        elif hypothesis == "threshold_skip_anchor_priority":
+            hypothesis_instance = ThresholdSkipAnchorPriorityHypothesis()
+        else:
+            hypothesis_instance = get_hypothesis(hypothesis, **hypothesis_params)
+    else:
+        hypothesis_instance = hypothesis
+    
+    # 각 학습 비율에 대해 검증 수행
+    for train_ratio in train_ratios:
+        if isinstance(hypothesis_instance, ThresholdSkipAnchorPriorityHypothesis) and not isinstance(hypothesis_instance, ThresholdSkipAnchorPriorityExtendedHypothesis):
+            res = batch_validate_threshold_skip_anchor_priority_cp(
+                cutoff_grid_string_id,
+                window_sizes=window_sizes,
+                method=method,
+                threshold=threshold,
+                window_thresholds=window_thresholds,
+                train_ratio=train_ratio,
+                stop_on_match=stop_on_match,
+            )
+        elif isinstance(hypothesis_instance, ThresholdSkipAnchorPriorityExtendedHypothesis):
+            res = batch_validate_threshold_skip_anchor_priority_extended_cp(
+                cutoff_grid_string_id,
+                window_sizes=window_sizes,
+                method=method,
+                threshold=threshold,
+                window_thresholds=window_thresholds,
+                train_ratio=train_ratio,
+                stop_on_match=stop_on_match,
+                additional_condition=additional_condition,
+            )
+        else:
+            res = batch_validate_hypothesis_cp(
+                cutoff_grid_string_id,
+                hypothesis=hypothesis_instance,
+                window_sizes=window_sizes,
+                method=method,
+                threshold=threshold,
+                train_ratio=train_ratio,
+                stop_on_match=stop_on_match,
+                **hypothesis_params
+            )
+        
+        results_by_ratio[train_ratio] = res
+        summary_by_ratio[train_ratio] = res.get("summary", {})
+    
+    return {
+        "train_ratios": train_ratios,
+        "results_by_ratio": results_by_ratio,
+        "summary_by_ratio": summary_by_ratio,
+    }

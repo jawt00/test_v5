@@ -134,9 +134,47 @@ N-gram 구조: $Input[i]$ (이전 줄의 마지막) + $Input[i+1...]$ (새로운
 
 윈도우 크기=8, 최대 간격=5, 임계값=52.2%  260125 1030 L6
 
+
+streamlit run change_point_ngram_app.py 
 streamlit run change_point_simulation_app.py
 streamlit run live_game_change_point_app.py
 
+streamlit run change_point_simulation_app.py
 
+git checkout change_point
+git pull origin change_point
+
+8 52 60 
+9 52 60 
+10 53 60
+11 54 65 
+12 56 70 
+
+
+윈도우 크기=8, 임계값=59.0%
+
+
+새로운 가설이야 
+1. 학습데이터 설정하고 검증데이터만 검증하는 부분은 동일 
+2. 사용자가 선택한 윈도우크기와 임계점을 기준으로 검증 실행 
+3. 임계점 미만은 스킵하는 전략 
+4. grid_string 전체 검증 실행 
+5. 앵커가 중첩되는 경우 이전 앵커를 우선 검증 
+6. 이전 앵커가 스킵인 경우는 예측값이 있는 앵커로 검증 
+
+12 64 13%
+11 60
+10 56
+9 55
+
+12 56 
+11 57 
+10 55 
+9 53
+
+12 58 
+11 59 
+10 57
+9 55 
 
 

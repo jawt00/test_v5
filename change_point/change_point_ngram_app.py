@@ -191,7 +191,32 @@ def save_grid_string_to_db(grid_string):
             result = cursor.fetchone()
             if result:
                 record_id = result[0]
-                # 이미 저장된 레코드이므로 ngram_chunks_change_point는 생성하지 않음
+                # 중복된 경우에도 누락된 윈도우 크기 확인 및 생성
+                # 윈도우 크기별로 확인하고 없는 것만 생성
+                target_window_sizes = [5, 6, 7, 8, 9, 10, 11, 12]
+                missing_window_sizes = []
+                for window_size in target_window_sizes:
+                    cursor.execute('''
+                        SELECT COUNT(*) FROM ngram_chunks_change_point 
+                        WHERE grid_string_id = ? AND window_size = ?
+                    ''', (record_id, window_size))
+                    existing_count = cursor.fetchone()[0]
+                    if existing_count == 0:
+                        missing_window_sizes.append(window_size)
+                
+                # 누락된 윈도우 크기가 있으면 생성
+                if missing_window_sizes:
+                    try:
+                        generate_and_save_ngram_chunks_change_point(
+                            record_id,
+                            grid_string,
+                            window_sizes=missing_window_sizes,
+                            conn=conn
+                        )
+                    except Exception as ngram_error:
+                        import warnings
+                        warnings.warn(f"ngram_chunks_change_point 생성 중 오류 발생: {str(ngram_error)}")
+                
                 conn.commit()
                 conn.close()
                 
@@ -278,7 +303,12 @@ def save_grid_string_to_db(grid_string):
         # ngram_chunks_change_point 생성 및 저장 (새로 저장된 경우에만)
         # 같은 연결을 재사용하여 락 방지
         try:
-            generate_and_save_ngram_chunks_change_point(record_id, grid_string, conn=conn)
+            generate_and_save_ngram_chunks_change_point(
+                record_id, 
+                grid_string, 
+                window_sizes=[5, 6, 7, 8, 9, 10, 11, 12],
+                conn=conn
+            )
         except Exception as ngram_error:
             # ngram_chunks 생성 실패해도 레코드는 저장되었으므로 경고만
             import warnings
@@ -541,14 +571,14 @@ def main():
         # N-gram 생성 섹션 (추가 생성용 - 저장 시 이미 자동 생성됨)
         st.markdown("---")
         st.header("📦 추가 N-gram 생성 (선택사항)")
-        st.info("💡 DB 저장 시 기본 윈도우 크기(5, 6, 7, 8, 9)로 N-gram이 자동 생성됩니다. 다른 윈도우 크기로 추가 생성하려면 이 섹션을 사용하세요.")
+        st.info("💡 DB 저장 시 기본 윈도우 크기(5, 6, 7, 8, 9, 10, 11, 12)로 N-gram이 자동 생성됩니다. 다른 윈도우 크기로 추가 생성하려면 이 섹션을 사용하세요.")
         
         col_gen1, col_gen2 = st.columns([2, 1])
         
         with col_gen1:
             window_sizes = st.multiselect(
                 "윈도우 크기 선택",
-                options=[5, 6, 7, 8, 9],
+                options=[5, 6, 7, 8, 9, 10, 11, 12],
                 default=[],
                 key="window_sizes_select"
             )
@@ -685,7 +715,7 @@ def main():
         2. **DB 저장 (자동 N-gram 생성 포함)**
            - 파싱 완료 후 '💾 DB 저장' 버튼 클릭
            - Grid String이 데이터베이스에 저장됩니다
-           - **자동으로 Change-point Detection 기반 N-gram이 생성되어 저장됩니다** (윈도우 크기: 5, 6, 7, 8, 9)
+           - **자동으로 Change-point Detection 기반 N-gram이 생성되어 저장됩니다** (윈도우 크기: 5, 6, 7, 8, 9, 10, 11, 12)
         
         3. **Change-point Detection**
            - 저장 후 자동으로 변화점 감지 및 앵커 위치 계산

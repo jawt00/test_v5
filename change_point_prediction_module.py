@@ -143,12 +143,14 @@ def save_or_update_predictions_for_change_point_data(
     methods=("빈도 기반",),
     thresholds=(0, 50, 60, 70, 80, 90, 100),
     batch_size=1000,
+    min_sample_count=15,  # 최소 표본 수 필터 (S_min)
 ):
     """
     ngram_chunks_change_point로 모델 구축 후 예측값을 stored_predictions_change_point에 저장.
 
     - cutoff 이전(id <= cutoff) grid_string으로만 학습
     - hypothesis_validation_app의 build_* / predict_* 재사용
+    - min_sample_count: 최소 표본 수 필터 (기본값 15, 15회 미만 출현 패턴은 제외)
     """
     conn = get_change_point_db_connection()
     try:
@@ -174,6 +176,12 @@ def save_or_update_predictions_for_change_point_data(
             if len(train_ngrams) == 0:
                 continue
 
+            # 최소 표본 수 필터 적용: prefix별 출현 횟수 집계
+            prefix_counts = train_ngrams.groupby("prefix").size()
+            valid_prefixes = set(
+                prefix_counts[prefix_counts >= min_sample_count].index.tolist()
+            )
+
             for method in methods:
                 if method == "빈도 기반":
                     model = build_frequency_model(train_ngrams)
@@ -184,7 +192,8 @@ def save_or_update_predictions_for_change_point_data(
                 else:
                     model = build_frequency_model(train_ngrams)
 
-                all_prefixes = set(train_ngrams["prefix"].unique())
+                # 최소 표본 수 필터 적용된 prefix만 사용
+                all_prefixes = set(train_ngrams["prefix"].unique()) & valid_prefixes
                 batch_data = []
 
                 for prefix in all_prefixes:

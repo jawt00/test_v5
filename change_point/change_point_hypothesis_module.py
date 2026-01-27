@@ -2367,36 +2367,40 @@ def validate_first_anchor_extended_window_v3_cp(
         total_skipped = 0
         stopped_early = False
         
-        # 현재 검증 포지션 (초기값: 최소 윈도우 크기 - 1, 첫 예측 가능한 위치)
-        current_pos = max_ws - 1
+        # 첫 번째 앵커부터 검증 시작
+        # current_pos를 첫 번째 앵커 이하로 설정하여 첫 번째 앵커부터 검증
+        first_anchor = anchors[0] if anchors else 0
+        current_pos = 0  # 첫 번째 앵커부터 검증 시작
         MAX_CONSECUTIVE_FAILURES = 3
         
         # 앵커 기반 순차 검증 루프
-        while current_pos < len(grid_string):
+        # 첫 번째 앵커부터 시작
+        anchor_idx = 0
+        
+        while current_pos < len(grid_string) and anchor_idx < len(anchors):
             # [REQ-101] current_pos 이후의 가장 빠른 앵커 찾기
-            next_anchor = None
-            for anchor in anchors:
-                if anchor >= current_pos:
-                    next_anchor = anchor
-                    break
+            # 이미 정렬된 anchors 리스트를 활용하여 인덱스로 접근
+            while anchor_idx < len(anchors) and anchors[anchor_idx] < current_pos:
+                anchor_idx += 1
             
             # 더 이상 검증할 앵커가 없으면 종료
-            if next_anchor is None:
+            if anchor_idx >= len(anchors):
                 break
+            
+            next_anchor = anchors[anchor_idx]
             
             # 해당 앵커에서 윈도우 크기별 순차 검증
             anchor_consecutive_failures = 0
             anchor_success = False
             last_mismatched_pos = None
+            anchor_processed_any = False  # 이 앵커에서 실제로 처리한 예측이 있는지
             
             # [REQ-102] 윈도우 크기 9, 10, 11, 12, 13, 14 순차 검증
             for window_size in window_sizes:
                 # 앵커 위치에서 window_size만큼 추출 가능한지 확인
-                if next_anchor + window_size > len(grid_string):
-                    break
-                
-                # 예측할 위치 (suffix 위치)
                 pos = next_anchor + window_size - 1
+                if pos >= len(grid_string):
+                    break  # 범위를 벗어나면 더 큰 윈도우는 시도하지 않음
                 
                 # current_pos보다 이전 포지션이면 건너뛰기
                 if pos < current_pos:
@@ -2409,10 +2413,10 @@ def validate_first_anchor_extended_window_v3_cp(
                 prefix_len = window_size - 1
                 prefix = grid_string[pos - prefix_len : pos]
                 
-                # DB에서 예측값 조회
+                # DB에서 예측값 조회 (시뮬레이션 전용 테이블 사용)
                 q = """
                     SELECT predicted_value, confidence, b_ratio, p_ratio
-                    FROM stored_predictions_change_point
+                    FROM simulation_predictions_change_point
                     WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
                     LIMIT 1
                 """
@@ -2436,8 +2440,10 @@ def validate_first_anchor_extended_window_v3_cp(
                         "skipped": True,
                         "skip_reason": "예측 테이블에 값 없음",
                     })
-                    continue
+                    continue  # 스킵해도 계속 진행
                 
+                # 예측값이 있는 경우 처리
+                anchor_processed_any = True
                 row = df_pred.iloc[0]
                 predicted = row["predicted_value"]
                 confidence = row["confidence"]
@@ -2484,18 +2490,40 @@ def validate_first_anchor_extended_window_v3_cp(
                 
                 # [RULE-1] 적중 시 즉시 종료하고 다음 앵커 탐색
                 if ok:
-                    # matched_pos + 1을 current_pos로 설정
                     current_pos = pos + 1
-                    break  # 현재 앵커 검증 종료, 다음 앵커로
+                    anchor_idx += 1  # 다음 앵커로
+                    break  # 현재 앵커 검증 종료
                 
                 # [RULE-2] 3회 연속 불일치 발생 시 해당 앵커 검증 실패로 종료
                 if anchor_consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                    # 3번째 불일치 포지션의 다음 인덱스를 current_pos로 설정
                     if last_mismatched_pos is not None:
                         current_pos = last_mismatched_pos + 1
                     else:
                         current_pos = pos + 1
-                    break  # 현재 앵커 검증 종료, 다음 앵커로
+                    anchor_idx += 1  # 다음 앵커로
+                    break  # 현재 앵커 검증 종료
+            
+            # 윈도우 크기 루프가 끝났는데 current_pos가 업데이트되지 않은 경우
+            # (적중도 없고 3회 연속 불일치도 없이 루프가 끝난 경우)
+            if not anchor_success and anchor_consecutive_failures < MAX_CONSECUTIVE_FAILURES:
+                # 이 앵커에서 실제로 처리한 예측이 있었다면 마지막 포지션 다음으로
+                if anchor_processed_any and last_mismatched_pos is not None:
+                    current_pos = last_mismatched_pos + 1
+                elif anchor_processed_any:
+                    # 처리했지만 불일치 포지션이 기록되지 않은 경우 (이론적으로 발생하지 않아야 함)
+                    # 이 앵커에서 가능한 최대 포지션 다음으로
+                    max_pos = min(next_anchor + max(window_sizes) - 1, len(grid_string) - 1)
+                    current_pos = max_pos + 1
+                else:
+                    # 모든 윈도우가 스킵되었거나 범위를 벗어남
+                    # 이 앵커에서 가능한 최대 포지션 다음으로
+                    max_pos = min(next_anchor + max(window_sizes) - 1, len(grid_string) - 1)
+                    if max_pos >= current_pos:
+                        current_pos = max_pos + 1
+                    else:
+                        current_pos = len(grid_string)  # 루프 종료
+                
+                anchor_idx += 1  # 다음 앵커로
             
             # stop_on_match 옵션 처리
             if stop_on_match and anchor_success:
@@ -2518,56 +2546,265 @@ def validate_first_anchor_extended_window_v3_cp(
         conn.close()
 
 
+def create_simulation_predictions_change_point_table():
+    """
+    시뮬레이션 전용 예측 테이블 생성 (기존 DB 수정 없음)
+    
+    Returns:
+        bool: 테이블 생성 성공 여부
+    """
+    conn = get_change_point_db_connection()
+    cursor = conn.cursor()
+    try:
+        # 기존 테이블이 있으면 삭제하고 재생성 (시뮬레이션마다 새로 생성)
+        cursor.execute("DROP TABLE IF EXISTS simulation_predictions_change_point")
+        cursor.execute("""
+            CREATE TABLE simulation_predictions_change_point (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                window_size INTEGER NOT NULL,
+                prefix TEXT NOT NULL,
+                predicted_value TEXT,
+                confidence REAL,
+                b_ratio REAL,
+                p_ratio REAL,
+                method TEXT NOT NULL,
+                threshold REAL NOT NULL,
+                created_at TIMESTAMP DEFAULT (datetime('now', '+9 hours')),
+                updated_at TIMESTAMP DEFAULT (datetime('now', '+9 hours')),
+                UNIQUE(window_size, prefix, method, threshold)
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sim_cp_sp_window_prefix ON simulation_predictions_change_point(window_size, prefix)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sim_cp_sp_method_threshold ON simulation_predictions_change_point(method, threshold)"
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def save_predictions_to_simulation_table(
+    cutoff_grid_string_id=None,
+    window_sizes=(9, 10, 11, 12, 13, 14),
+    methods=("빈도 기반",),
+    thresholds=(0,),
+    batch_size=1000,
+    min_sample_count=15,
+):
+    """
+    시뮬레이션 전용 테이블에 예측값 저장
+    
+    - cutoff 이전(id <= cutoff) grid_string으로만 학습
+    - simulation_predictions_change_point 테이블에 저장 (기존 테이블 수정 없음)
+    
+    Args:
+        cutoff_grid_string_id: cutoff ID (이 ID 이전 = 학습 데이터)
+        window_sizes: 윈도우 크기 목록
+        methods: 예측 방법 목록
+        thresholds: 임계값 목록
+        batch_size: 배치 크기
+        min_sample_count: 최소 표본 수 필터
+        
+    Returns:
+        dict: 저장 결과 통계
+    """
+    from change_point_prediction_module import load_ngram_chunks_change_point
+    from hypothesis_validation_app import (
+        build_frequency_model,
+        build_weighted_model,
+        build_safety_first_model,
+        predict_for_prefix,
+        predict_confidence_threshold,
+    )
+    
+    conn = get_change_point_db_connection()
+    try:
+        if cutoff_grid_string_id is None:
+            q = "SELECT id FROM preprocessed_grid_strings ORDER BY id"
+            params = []
+        else:
+            q = "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id"
+            params = [cutoff_grid_string_id]
+        df_hist = pd.read_sql_query(q, conn, params=params)
+        if len(df_hist) == 0:
+            return {"total_saved": 0, "new_records": 0, "updated_records": 0, "unique_prefixes": 0}
+
+        historical_ids = df_hist["id"].tolist()
+        total_saved = 0
+        new_records = 0
+        updated_records = 0
+        unique_prefixes_set = set()
+        cursor = conn.cursor()
+
+        for window_size in window_sizes:
+            train_ngrams = load_ngram_chunks_change_point(window_size=window_size, grid_string_ids=historical_ids)
+            if len(train_ngrams) == 0:
+                continue
+
+            # 최소 표본 수 필터 적용: prefix별 출현 횟수 집계
+            prefix_counts = train_ngrams.groupby("prefix").size()
+            valid_prefixes = set(
+                prefix_counts[prefix_counts >= min_sample_count].index.tolist()
+            )
+
+            for method in methods:
+                if method == "빈도 기반":
+                    model = build_frequency_model(train_ngrams)
+                elif method == "가중치 기반":
+                    model = build_weighted_model(train_ngrams)
+                elif method == "안전 우선":
+                    model = build_safety_first_model(train_ngrams)
+                else:
+                    model = build_frequency_model(train_ngrams)
+
+                # 최소 표본 수 필터 적용된 prefix만 사용
+                all_prefixes = set(train_ngrams["prefix"].unique()) & valid_prefixes
+                batch_data = []
+
+                for prefix in all_prefixes:
+                    unique_prefixes_set.add((window_size, prefix))
+                    for threshold in thresholds:
+                        if threshold == 0:
+                            res = predict_for_prefix(model, prefix, method)
+                        else:
+                            res = predict_confidence_threshold(model, prefix, method, threshold)
+                        pred = res.get("predicted")
+                        conf = res.get("confidence", 0.0)
+                        ratios = res.get("ratios", {})
+                        b_ratio = ratios.get("b", 0.0)
+                        p_ratio = ratios.get("p", 0.0)
+                        batch_data.append((window_size, prefix, pred, conf, b_ratio, p_ratio, method, threshold))
+
+                for i in range(0, len(batch_data), batch_size):
+                    batch = batch_data[i : i + batch_size]
+                    for item in batch:
+                        try:
+                            cursor.execute(
+                                """
+                                SELECT id FROM simulation_predictions_change_point
+                                WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
+                                """,
+                                (item[0], item[1], item[6], item[7]),
+                            )
+                            existing = cursor.fetchone()
+                            cursor.execute(
+                                """
+                                INSERT OR REPLACE INTO simulation_predictions_change_point
+                                (window_size, prefix, predicted_value, confidence, b_ratio, p_ratio, method, threshold, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
+                                """,
+                                item,
+                            )
+                            if existing:
+                                updated_records += 1
+                            else:
+                                new_records += 1
+                            total_saved += 1
+                        except Exception:
+                            continue
+
+        conn.commit()
+        return {
+            "total_saved": total_saved,
+            "new_records": new_records,
+            "updated_records": updated_records,
+            "unique_prefixes": len(unique_prefixes_set),
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def generate_simulation_predictions_table(
+    cutoff_grid_string_id,
+    window_sizes=(9, 10, 11, 12, 13, 14),
+    method="빈도 기반",
+    threshold=0,
+    min_sample_count=15,
+):
+    """
+    시뮬레이션 전용 예측 테이블 생성 및 예측값 저장 (별도 실행)
+    
+    **사용 방식:**
+    1. 이 함수를 먼저 실행하여 예측값 테이블 생성
+    2. 이후 batch_validate_first_anchor_extended_window_v3_cp 실행하여 검증
+    
+    Args:
+        cutoff_grid_string_id: cutoff ID (이 ID 이전 = 학습 데이터)
+        window_sizes: 윈도우 크기 목록 (기본값: 9, 10, 11, 12, 13, 14)
+        method: 예측 방법
+        threshold: 임계값 (예측값 생성 시 사용)
+        min_sample_count: 최소 표본 수 필터
+        
+    Returns:
+        dict: 저장 결과 통계
+    """
+    # 시뮬레이션 전용 테이블 생성
+    try:
+        create_simulation_predictions_change_point_table()
+    except Exception as e:
+        import warnings
+        warnings.warn(f"시뮬레이션 테이블 생성 실패: {e}")
+        raise
+    
+    # cutoff 이전 데이터로 예측값 생성하여 시뮬레이션 테이블에 저장
+    try:
+        pred_result = save_predictions_to_simulation_table(
+            cutoff_grid_string_id=cutoff_grid_string_id,
+            window_sizes=window_sizes,
+            methods=(method,),
+            thresholds=(threshold,),
+            min_sample_count=min_sample_count,
+        )
+        return pred_result
+    except Exception as e:
+        import warnings
+        warnings.warn(f"예측값 생성 실패: {e}")
+        raise
+
+
 def batch_validate_first_anchor_extended_window_v3_cp(
     cutoff_grid_string_id,
     window_sizes=(9, 10, 11, 12, 13, 14),
     method="빈도 기반",
     threshold=0,
     stop_on_match=False,
-    auto_generate_predictions=True,
 ):
     """
-    첫 앵커 확장 윈도우 V3 배치 검증 (cutoff 이후 grid_string) - V2 복제
+    첫 앵커 확장 윈도우 V3 배치 검증 (cutoff 이후 grid_string)
     
     **예측값 사용 방식:**
-    1. cutoff 이전 데이터(학습 데이터)로만 예측값 테이블 생성
-    2. 생성된 예측값으로 cutoff 이후 데이터(검증 데이터) 검증
+    1. 시뮬레이션 전용 테이블 (simulation_predictions_change_point)에서 예측값 조회
+    2. cutoff 이후 데이터(검증 데이터) 검증
+    3. 기존 stored_predictions_change_point 테이블은 수정하지 않음
+    
+    **주의사항:**
+    - 검증 전에 generate_simulation_predictions_table() 함수를 먼저 실행하여
+      예측값 테이블을 생성해야 합니다.
     
     Args:
         cutoff_grid_string_id: cutoff ID (이 ID 이전 = 학습 데이터, 이후 = 검증 데이터)
         window_sizes: 윈도우 크기 목록 (기본값: 9, 10, 11, 12, 13, 14)
         method: 예측 방법
-        threshold: 임계값 (예측값 생성 시 사용)
+        threshold: 임계값 (예측값 조회 시 사용)
         stop_on_match: True이면 각 grid_string 검증 중 일치하는 결과가 나오면 종료
-        auto_generate_predictions: True이면 cutoff 이전 데이터로 예측값 자동 생성
         
     Returns:
         dict: {
             "results": 검증 결과 목록,
             "summary": 요약 통계,
             "grid_string_ids": 검증된 grid_string ID 목록,
-            "train_grid_string_ids": 학습용 grid_string ID 목록 (cutoff 이전),
-            "predictions_generated": 예측값 생성 여부
+            "train_grid_string_ids": 학습용 grid_string ID 목록 (cutoff 이전)
         }
     """
-    from change_point_prediction_module import save_or_update_predictions_for_change_point_data
-    
-    # cutoff 이전 데이터로 예측값 테이블 생성 (학습 데이터 기반)
-    predictions_generated = False
-    if auto_generate_predictions:
-        try:
-            pred_result = save_or_update_predictions_for_change_point_data(
-                cutoff_grid_string_id=cutoff_grid_string_id,
-                window_sizes=window_sizes,
-                methods=(method,),
-                thresholds=(threshold,),
-                min_sample_count=15,
-            )
-            predictions_generated = True
-        except Exception as e:
-            # 예측값 생성 실패 시 경고만 출력하고 계속 진행
-            import warnings
-            warnings.warn(f"예측값 생성 실패: {e}. 기존 예측값을 사용합니다.")
     
     conn = get_change_point_db_connection()
     try:
@@ -2600,7 +2837,6 @@ def batch_validate_first_anchor_extended_window_v3_cp(
                 },
                 "grid_string_ids": [],
                 "train_grid_string_ids": df_train["id"].tolist() if len(df_train) > 0 else [],
-                "predictions_generated": predictions_generated,
             }
         
         # cutoff 이후의 모든 데이터를 검증
@@ -2648,7 +2884,6 @@ def batch_validate_first_anchor_extended_window_v3_cp(
             "summary": summary,
             "grid_string_ids": test_gids,
             "train_grid_string_ids": train_gids,
-            "predictions_generated": predictions_generated,
         }
     finally:
         conn.close()

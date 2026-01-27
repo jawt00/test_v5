@@ -28,6 +28,7 @@ from change_point_hypothesis_module import (
     batch_validate_threshold_skip_anchor_priority_cp,
     batch_validate_first_anchor_extended_window_v2_cp,
     batch_validate_first_anchor_extended_window_v3_cp,
+    generate_simulation_predictions_table,
     HYPOTHESIS_REGISTRY,
 )
 
@@ -261,7 +262,7 @@ def main():
             hypothesis_config = {}
         elif is_first_anchor_extended_v3:
             st.markdown("#### 윈도우 크기 (9-14)")
-            st.info("📌 첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 신뢰도 기반으로 검증합니다. (V3 - V2 복제, 수정 가능)")
+            st.info("📌 첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 신뢰도 기반으로 검증합니다. (V3 - 앵커 기반 순차 검증)")
             
             col_w1, col_w2, col_w3, col_w4, col_w5, col_w6 = st.columns(6)
             with col_w1:
@@ -288,6 +289,31 @@ def main():
             st.markdown("#### 임계값")
             thresh_sim = st.number_input("임계값", 0, 100, 0, key="thresh_extended_v3")
             hypothesis_config = {}
+            
+            # V3 전용: 예측값 테이블 생성 버튼
+            st.markdown("---")
+            st.markdown("#### 🔧 V3 시뮬레이션 예측값 테이블 생성")
+            st.info("💡 V3 검증을 실행하기 전에 먼저 예측값 테이블을 생성해야 합니다.")
+            
+            if st.button("예측값 테이블 생성", key="generate_v3_predictions", type="secondary"):
+                if not ws:
+                    st.warning("최소 하나의 윈도우를 선택하세요.")
+                elif cutoff_sim is None:
+                    st.warning("Cutoff ID를 선택하세요.")
+                else:
+                    with st.spinner("예측값 테이블 생성 중... (시간이 소요될 수 있습니다)"):
+                        try:
+                            result = generate_simulation_predictions_table(
+                                cutoff_grid_string_id=cutoff_sim,
+                                window_sizes=tuple(ws),
+                                method=method_sim,
+                                threshold=thresh_sim,
+                            )
+                            st.success(f"✅ 예측값 테이블 생성 완료! (저장된 레코드: {result.get('total_saved', 0):,}개)")
+                            st.session_state["v3_predictions_generated"] = True
+                        except Exception as e:
+                            st.error(f"❌ 예측값 테이블 생성 실패: {str(e)}")
+                            st.session_state["v3_predictions_generated"] = False
         else:
             st.markdown("#### 윈도우 크기")
             col_w1, col_w2, col_w3, col_w4, col_w5 = st.columns(5)
@@ -331,8 +357,10 @@ def main():
                 # V3 독립 검증 함수 사용
                 if not ws:
                     st.warning("최소 하나의 윈도우를 선택하세요.")
-                elif n_stored == 0:
-                    st.warning("예측값을 먼저 생성하세요.")
+                elif cutoff_sim is None:
+                    st.warning("Cutoff ID를 선택하세요.")
+                elif not st.session_state.get("v3_predictions_generated", False):
+                    st.warning("⚠️ 먼저 '예측값 테이블 생성' 버튼을 클릭하여 예측값 테이블을 생성하세요.")
                 else:
                     st.session_state["test_mode"] = "single"
                     st.session_state["test_hypothesis"] = selected_hypothesis_name
@@ -926,6 +954,10 @@ def main():
                     st.session_state["test_results"] = res
                     bar.progress(1.0)
                     status.text("완료")
+                    # 시뮬레이션 완료 후 재실행 트리거 제거하고 결과 표시를 위해 한 번 더 실행
+                    if "test_cutoff" in st.session_state:
+                        del st.session_state["test_cutoff"]
+                        st.rerun()  # 결과 표시를 위해 재실행
                 
                 else:  # 비교 테스트
                     hypotheses = st.session_state.get("test_hypotheses", [])
@@ -982,16 +1014,21 @@ def main():
                     st.session_state["test_results"] = results_dict
                     bar.progress(1.0)
                     status.text("완료")
+                    # 시뮬레이션 완료 후 재실행 트리거 제거하고 결과 표시를 위해 한 번 더 실행
+                    if "test_cutoff" in st.session_state:
+                        del st.session_state["test_cutoff"]
+                        st.rerun()  # 결과 표시를 위해 재실행
                 
             except Exception as e:
                 st.error(f"시뮬레이션 실패: {e}")
                 import traceback
                 st.code(traceback.format_exc())
+                # 에러 발생 시 세션 상태 정리하여 무한 루프 방지
+                if "test_cutoff" in st.session_state:
+                    del st.session_state["test_cutoff"]
             finally:
                 bar.empty()
                 status.empty()
-        
-        st.rerun()
 
 
 if __name__ == "__main__":

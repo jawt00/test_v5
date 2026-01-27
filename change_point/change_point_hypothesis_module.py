@@ -2546,6 +2546,229 @@ def validate_first_anchor_extended_window_v3_cp(
         conn.close()
 
 
+# ============================================================================
+# 첫 앵커 확장 윈도우 V3 + 라이브 게임형 다음 앵커 선택 (신규 가설)
+# ============================================================================
+# 차이: [REQ-101] 대신 [REQ-101-LIVE] 사용.
+# - V3: current_pos 이후의 가장 빠른 앵커 (anchor_position >= current_pos)
+# - 본 함수: current_pos를 예측 가능한 가장 낮은 앵커 (anchor + max_ws - 1 >= current_pos)
+# 자세한 차이는 change_point/라이브게임_V3_다음앵커_로직_차이.md 참고.
+
+
+def validate_first_anchor_extended_window_v3_live_next_anchor_cp(
+    grid_string_id,
+    cutoff_grid_string_id,
+    window_sizes=(9, 10, 11, 12, 13, 14),
+    method="빈도 기반",
+    threshold=0,
+    stop_on_match=False,
+):
+    """
+    첫 앵커 확장 윈도우 V3 + 라이브 게임형 다음 앵커 선택 검증 함수
+    
+    V3와 동일한 [REQ-102], [RULE-1], [RULE-2] 적용.
+    **다음 앵커 선택만** 라이브 게임 방식으로 변경:
+    
+    [REQ-101-LIVE] current_pos를 예측 가능한 가장 낮은 앵커를 검증 대상으로 선정
+    - skip 조건: anchors[anchor_idx] + max_ws - 1 < current_pos
+    - (V3는 anchors[anchor_idx] < current_pos)
+    
+    추가: 문자열 길이로 for가 끊긴 경우 앵커를 바꾸지 않고 종료 (exit_for_pos_beyond).
+    
+    Args/Returns: validate_first_anchor_extended_window_v3_cp 와 동일.
+    """
+    conn = get_change_point_db_connection()
+    try:
+        df = pd.read_sql_query(
+            "SELECT grid_string FROM preprocessed_grid_strings WHERE id = ?",
+            conn,
+            params=[grid_string_id],
+        )
+        if len(df) == 0:
+            return None
+        grid_string = df.iloc[0]["grid_string"]
+        max_ws = max(window_sizes)
+        if len(grid_string) < max_ws:
+            return {
+                "grid_string_id": grid_string_id,
+                "max_consecutive_failures": 0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+                "accuracy": 0.0,
+                "history": [],
+                "stopped_early": False,
+            }
+
+        anchors = []
+        for i in range(len(grid_string) - 1):
+            if grid_string[i] != grid_string[i + 1]:
+                anchors.append(i)
+        anchors = sorted(list(set(anchors)))
+
+        if not anchors:
+            return {
+                "grid_string_id": grid_string_id,
+                "max_consecutive_failures": 0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+                "accuracy": 0.0,
+                "history": [],
+                "stopped_early": False,
+            }
+
+        history = []
+        consecutive_failures = 0
+        max_consecutive_failures = 0
+        total_steps = 0
+        total_failures = 0
+        total_predictions = 0
+        total_skipped = 0
+        stopped_early = False
+        current_pos = 0
+        anchor_idx = 0
+        MAX_CONSECUTIVE_FAILURES = 3
+
+        while current_pos < len(grid_string) and anchor_idx < len(anchors):
+            # [REQ-101-LIVE] 해당 앵커가 커버할 수 있는 최대 position을 이미 지났을 때만 skip
+            while anchor_idx < len(anchors) and anchors[anchor_idx] + max_ws - 1 < current_pos:
+                anchor_idx += 1
+            if anchor_idx >= len(anchors):
+                break
+
+            next_anchor = anchors[anchor_idx]
+            anchor_consecutive_failures = 0
+            anchor_success = False
+            last_mismatched_pos = None
+            anchor_processed_any = False
+            exit_for_pos_beyond = False
+
+            for window_size in window_sizes:
+                pos = next_anchor + window_size - 1
+                if pos >= len(grid_string):
+                    exit_for_pos_beyond = True
+                    break
+                if pos < current_pos:
+                    continue
+
+                total_steps += 1
+                actual = grid_string[pos]
+                prefix_len = window_size - 1
+                prefix = grid_string[pos - prefix_len : pos]
+
+                q = """
+                    SELECT predicted_value, confidence, b_ratio, p_ratio
+                    FROM simulation_predictions_change_point
+                    WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
+                    LIMIT 1
+                """
+                df_pred = pd.read_sql_query(q, conn, params=[window_size, prefix, method, threshold])
+
+                if len(df_pred) == 0:
+                    total_skipped += 1
+                    history.append({
+                        "step": total_steps,
+                        "position": pos,
+                        "anchor": next_anchor,
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": None,
+                        "actual": actual,
+                        "is_correct": None,
+                        "confidence": 0.0,
+                        "selected_window_size": window_size,
+                        "all_predictions": [],
+                        "skipped": True,
+                        "skip_reason": "예측 테이블에 값 없음",
+                    })
+                    continue
+
+                anchor_processed_any = True
+                row = df_pred.iloc[0]
+                predicted = row["predicted_value"]
+                confidence = row["confidence"]
+                ok = predicted == actual
+                total_predictions += 1
+
+                if not ok:
+                    consecutive_failures += 1
+                    anchor_consecutive_failures += 1
+                    total_failures += 1
+                    last_mismatched_pos = pos
+                    if consecutive_failures > max_consecutive_failures:
+                        max_consecutive_failures = consecutive_failures
+                else:
+                    consecutive_failures = 0
+                    anchor_success = True
+                    anchor_consecutive_failures = 0
+
+                history.append({
+                    "step": total_steps,
+                    "position": pos,
+                    "anchor": next_anchor,
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": predicted,
+                    "actual": actual,
+                    "is_correct": ok,
+                    "confidence": confidence,
+                    "selected_window_size": window_size,
+                    "all_predictions": [{
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": predicted,
+                        "confidence": confidence,
+                        "b_ratio": row["b_ratio"],
+                        "p_ratio": row["p_ratio"],
+                    }],
+                    "skipped": False,
+                })
+
+                if ok:
+                    current_pos = pos + 1
+                    anchor_idx += 1
+                    break
+                if anchor_consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    current_pos = (last_mismatched_pos + 1) if last_mismatched_pos is not None else (pos + 1)
+                    anchor_idx += 1
+                    break
+
+            if exit_for_pos_beyond:
+                break
+            if not anchor_success and anchor_consecutive_failures < MAX_CONSECUTIVE_FAILURES:
+                if anchor_processed_any and last_mismatched_pos is not None:
+                    current_pos = last_mismatched_pos + 1
+                elif anchor_processed_any:
+                    max_pos = min(next_anchor + max(window_sizes) - 1, len(grid_string) - 1)
+                    current_pos = max_pos + 1
+                else:
+                    max_pos = min(next_anchor + max(window_sizes) - 1, len(grid_string) - 1)
+                    current_pos = max_pos + 1 if max_pos >= current_pos else len(grid_string)
+                anchor_idx += 1
+
+            if stop_on_match and anchor_success:
+                stopped_early = True
+                break
+
+        acc = ((total_predictions - total_failures) / total_predictions * 100) if total_predictions > 0 else 0.0
+        return {
+            "grid_string_id": grid_string_id,
+            "max_consecutive_failures": max_consecutive_failures,
+            "total_steps": total_steps,
+            "total_failures": total_failures,
+            "total_predictions": total_predictions,
+            "total_skipped": total_skipped,
+            "accuracy": acc,
+            "history": history,
+            "stopped_early": stopped_early,
+        }
+    finally:
+        conn.close()
+
+
 def create_simulation_predictions_change_point_table():
     """
     시뮬레이션 전용 예측 테이블 생성 (기존 DB 수정 없음)
@@ -2855,6 +3078,96 @@ def batch_validate_first_anchor_extended_window_v3_cp(
             if r is not None:
                 results.append(r)
         
+        if not results:
+            summary = {
+                "total_grid_strings": 0,
+                "avg_accuracy": 0.0,
+                "max_consecutive_failures": 0,
+                "avg_max_consecutive_failures": 0.0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+            }
+        else:
+            n = len(results)
+            summary = {
+                "total_grid_strings": n,
+                "avg_accuracy": sum(x["accuracy"] for x in results) / n,
+                "max_consecutive_failures": max(x["max_consecutive_failures"] for x in results),
+                "avg_max_consecutive_failures": sum(x["max_consecutive_failures"] for x in results) / n,
+                "total_steps": sum(x["total_steps"] for x in results),
+                "total_failures": sum(x["total_failures"] for x in results),
+                "total_predictions": sum(x["total_predictions"] for x in results),
+                "total_skipped": sum(x.get("total_skipped", 0) for x in results),
+                "total_stopped_early": sum(1 for x in results if x.get("stopped_early", False)),
+            }
+        return {
+            "results": results,
+            "summary": summary,
+            "grid_string_ids": test_gids,
+            "train_grid_string_ids": train_gids,
+        }
+    finally:
+        conn.close()
+
+
+def batch_validate_first_anchor_extended_window_v3_live_next_anchor_cp(
+    cutoff_grid_string_id,
+    window_sizes=(9, 10, 11, 12, 13, 14),
+    method="빈도 기반",
+    threshold=0,
+    stop_on_match=False,
+):
+    """
+    첫 앵커 확장 윈도우 V3 + 라이브 게임형 다음 앵커 선택 배치 검증.
+
+    validate_first_anchor_extended_window_v3_live_next_anchor_cp 를
+    cutoff 이후 모든 grid_string 에 대해 호출한 결과를 반환.
+    Args/Returns: batch_validate_first_anchor_extended_window_v3_cp 와 동일 구조.
+    """
+    conn = get_change_point_db_connection()
+    try:
+        df_test = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id > ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        df_train = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        if len(df_test) == 0:
+            return {
+                "results": [],
+                "summary": {
+                    "total_grid_strings": 0,
+                    "avg_accuracy": 0.0,
+                    "max_consecutive_failures": 0,
+                    "avg_max_consecutive_failures": 0.0,
+                    "total_steps": 0,
+                    "total_failures": 0,
+                    "total_predictions": 0,
+                    "total_skipped": 0,
+                },
+                "grid_string_ids": [],
+                "train_grid_string_ids": df_train["id"].tolist() if len(df_train) > 0 else [],
+            }
+        test_gids = df_test["id"].tolist()
+        train_gids = df_train["id"].tolist() if len(df_train) > 0 else []
+        results = []
+        for gid in test_gids:
+            r = validate_first_anchor_extended_window_v3_live_next_anchor_cp(
+                gid,
+                cutoff_grid_string_id,
+                window_sizes=window_sizes,
+                method=method,
+                threshold=threshold,
+                stop_on_match=stop_on_match,
+            )
+            if r is not None:
+                results.append(r)
         if not results:
             summary = {
                 "total_grid_strings": 0,

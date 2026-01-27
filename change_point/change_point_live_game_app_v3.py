@@ -507,6 +507,62 @@ def predict_for_position_v3(
     }
 
 
+def build_completed_validation_history_table(history):
+    """
+    완료된 검증(이전 히스토리)을 hypothesis_test_app 시뮬레이션 결과와 동일한 형식의
+    상세 히스토리 테이블 데이터로 변환합니다.
+    
+    Args:
+        history: validate_grid_string_v3 결과의 history 리스트
+        
+    Returns:
+        list[dict]: st.dataframe에 넣을 수 있는 행 리스트 (컬럼: Step, Position, Anchor, Window Size, Prefix, 예측, 실제값, 일치, 신뢰도, 스킵 사유)
+    """
+    rows = []
+    for entry in history or []:
+        is_correct = entry.get("is_correct")
+        match_status = "✅" if is_correct else ("❌" if is_correct is False else "-")
+        predicted = entry.get("predicted")
+        skipped = entry.get("skipped", False)
+        skip_reason = entry.get("skip_reason", "")
+        skipped_mark = "⏭️" if skipped else ""
+        if skipped and skip_reason:
+            skipped_mark = f"⏭️ ({skip_reason})"
+        predicted_display = f"{predicted}{skipped_mark}" if predicted else f"-{skipped_mark}" if skipped else "-"
+        rows.append({
+            "Step": entry.get("step", 0),
+            "Position": entry.get("position", ""),
+            "Anchor": entry.get("anchor", ""),
+            "Window Size": entry.get("window_size", ""),
+            "Prefix": entry.get("prefix", ""),
+            "예측": predicted_display,
+            "실제값": entry.get("actual", "-"),
+            "일치": match_status,
+            "신뢰도": f"{entry.get('confidence', 0):.1f}%" if predicted else "-",
+            "스킵 사유": skip_reason if skipped else "",
+        })
+    return rows
+
+
+def render_completed_validation_history_section(game_state):
+    """
+    게임 진행 영역 상단에 '완료된 검증 결과(이전 히스토리)'를
+    hypothesis_test_app 시뮬레이션 결과와 같은 방식으로 상세 테이블로 표시합니다.
+    """
+    validation_done = game_state.get("validation_completed", False)
+    history = game_state.get("history") or []
+    if not validation_done or not history:
+        return
+    st.markdown("### ✅ 완료된 검증 결과 (이전 히스토리)")
+    rows = build_completed_validation_history_table(history)
+    if rows:
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.caption(f"💡 게임 시작 시 수행한 전체 검증: {len(history)}개 스텝")
+    else:
+        st.info("히스토리 데이터가 없습니다.")
+
+
 def main():
     st.title("🎮 Change-point V3 라이브 게임")
     st.markdown("**V3 검증 로직 기반 라이브 게임: 첫 번째 앵커부터 검증, 적중 시 즉시 종료, 3회 연속 불일치 시 다음 앵커로**")
@@ -683,6 +739,10 @@ def main():
         st.markdown("---")
         st.markdown("## 🎮 게임 진행")
         
+        # ----- 새 영역: 완료된 검증 결과(상세 히스토리) - hypothesis_test_app 시뮬레이션 결과와 동일한 테이블 -----
+        render_completed_validation_history_section(game_state)
+        # ----- 새 영역 끝 -----
+        
         # 검증 완료 여부 확인
         validation_completed = game_state.get('validation_completed', False)
         
@@ -701,36 +761,6 @@ def main():
             st.metric("스킵 횟수", game_state['total_skipped'])
         with col_stat5:
             st.metric("현재 앵커", f"{anchors[anchor_idx] if anchor_idx < len(anchors) else 'N/A'}")
-        
-        # 이전 히스토리 = 전체 검증 결과 표시
-        if validation_completed and game_state['history']:
-            st.markdown("---")
-            with st.expander("📊 이전 히스토리 (전체 검증 결과)", expanded=True):
-                history_data = []
-                for entry in game_state['history']:
-                    is_correct = entry.get('is_correct')
-                    match_status = '✅' if is_correct else ('❌' if is_correct is False else '-')
-                    predicted = entry.get('predicted')
-                    skipped = entry.get('skipped', False)
-                    skipped_mark = '⏭️' if skipped else ''
-                    predicted_display = f"{predicted}{skipped_mark}" if predicted else f"-{skipped_mark}" if skipped else "-"
-                    
-                    history_data.append({
-                        'Step': entry.get('step', 0),
-                        'Position': entry.get('position', ''),
-                        'Anchor': entry.get('anchor', ''),
-                        'Window': entry.get('window_size', ''),
-                        'Prefix': entry.get('prefix', ''),
-                        '예측': predicted_display,
-                        '실제값': entry.get('actual', '-'),
-                        '일치': match_status,
-                        '신뢰도': f"{entry.get('confidence', 0):.1f}%" if predicted else '-',
-                    })
-                
-                if len(history_data) > 0:
-                    history_df = pd.DataFrame(history_data)
-                    st.dataframe(history_df, use_container_width=True, hide_index=True)
-                    st.caption(f"💡 이전 히스토리: 전체 {len(game_state['history'])}개 검증 결과가 표시됩니다.")
         
         # Grid String 전체 표시 및 앵커 시각화
         st.markdown("---")

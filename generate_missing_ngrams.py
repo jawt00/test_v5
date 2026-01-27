@@ -1,6 +1,6 @@
 """
 누락된 윈도우 크기의 ngram_chunks_change_point 생성 스크립트
-기존 데이터를 유지하면서 누락된 윈도우 크기(10, 11, 12)만 생성합니다.
+기존 데이터를 유지하면서 누락된 윈도우 크기(10, 11, 12, 13, 14)만 생성합니다.
 """
 
 import sqlite3
@@ -15,12 +15,12 @@ from svg_parser_module import (
     generate_and_save_ngram_chunks_change_point
 )
 
-def generate_missing_ngrams(target_window_sizes=[10, 11, 12]):
+def generate_missing_ngrams(target_window_sizes=[10, 11, 12, 13, 14]):
     """
     change_point_ngram.db의 모든 grid_string에 대해 누락된 윈도우 크기의 ngram_chunks_change_point 생성
     
     Args:
-        target_window_sizes: 생성할 윈도우 크기 리스트 (기본값: [10, 11, 12])
+        target_window_sizes: 생성할 윈도우 크기 리스트 (기본값: [10, 11, 12, 13, 14])
     """
     # 테이블 생성 확인
     print("테이블 생성 확인 중...")
@@ -120,5 +120,5 @@ if __name__ == "__main__":
     print("=" * 60)
     print()
     
-    # 윈도우 크기 10, 11, 12 생성
-    generate_missing_ngrams(target_window_sizes=[10, 11, 12])
+    # 윈도우 크기 10, 11, 12, 13, 14 생성
+    generate_missing_ngrams(target_window_sizes=[10, 11, 12, 13, 14])

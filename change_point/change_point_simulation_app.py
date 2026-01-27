@@ -171,7 +171,7 @@ def main():
                     try:
                         out = save_or_update_predictions_for_change_point_data(
                             cutoff_grid_string_id=cutoff_pred,
-                            window_sizes=(5, 6, 7, 8, 9, 10, 11, 12),
+                            window_sizes=(5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
                             methods=tuple(methods),
                             thresholds=(thresh_pred,),
                         )
@@ -225,7 +225,7 @@ def main():
             tol_skip = st.number_input("정밀도", 0.1, 2.0, 0.5, 0.1, key="tol_skip")
 
         st.markdown("#### 윈도우 크기")
-        col_w1, col_w2, col_w3, col_w4, col_w5 = st.columns(5)
+        col_w1, col_w2, col_w3, col_w4, col_w5, col_w6 = st.columns(6)
         with col_w1:
             w5 = st.checkbox("5", True, key="w5")
             w6 = st.checkbox("6", True, key="w6")
@@ -238,6 +238,9 @@ def main():
         with col_w4:
             w11 = st.checkbox("11", True, key="w11")
             w12 = st.checkbox("12", True, key="w12")
+        with col_w5:
+            w13 = st.checkbox("13", True, key="w13")
+            w14 = st.checkbox("14", True, key="w14")
         ws = []
         if w5: ws.append(5)
         if w6: ws.append(6)
@@ -247,6 +250,8 @@ def main():
         if w10: ws.append(10)
         if w11: ws.append(11)
         if w12: ws.append(12)
+        if w13: ws.append(13)
+        if w14: ws.append(14)
 
         if st.form_submit_button("시뮬레이션 실행", type="primary"):
             if not ws:
@@ -304,7 +309,7 @@ def main():
 
     elif "sim_run_cutoff" in st.session_state:
         cutoff_sim = st.session_state["sim_run_cutoff"]  # 0 = 전체 (id > 0)
-        ws = st.session_state.get("sim_run_ws", [5, 6, 7, 8, 9, 10, 11, 12])
+        ws = st.session_state.get("sim_run_ws", [5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
         method_sim = st.session_state.get("sim_run_method", "빈도 기반")
         thresh_sim = st.session_state.get("sim_run_thresh", 0)
         skip_mode = st.session_state.get("sim_run_skip_mode", "미사용")
@@ -375,8 +380,8 @@ def main():
                 help="패턴이 이 횟수 이상 출현한 경우만 예측에 사용"
             )
 
-        st.markdown("#### 윈도우 크기 (8-12)")
-        col_wf_w1, col_wf_w2, col_wf_w3, col_wf_w4, col_wf_w5 = st.columns(5)
+        st.markdown("#### 윈도우 크기 (8-14)")
+        col_wf_w1, col_wf_w2, col_wf_w3, col_wf_w4, col_wf_w5, col_wf_w6 = st.columns(6)
         wf_windows = []
         with col_wf_w1:
             wf_w8 = st.checkbox("8", False, key="wf_w8")
@@ -393,6 +398,11 @@ def main():
         with col_wf_w5:
             wf_w12 = st.checkbox("12", False, key="wf_w12")
             if wf_w12: wf_windows.append(12)
+        with col_wf_w6:
+            wf_w13 = st.checkbox("13", False, key="wf_w13")
+            if wf_w13: wf_windows.append(13)
+            wf_w14 = st.checkbox("14", False, key="wf_w14")
+            if wf_w14: wf_windows.append(14)
 
         st.markdown("#### 임계값 범위")
         col_wf_t1, col_wf_t2, col_wf_t3 = st.columns(3)
@@ -509,7 +519,7 @@ def main():
                         st.dataframe(opt_display, use_container_width=True, hide_index=True)
 
     elif "wf_run" in st.session_state and st.session_state.get("wf_run"):
-        wf_windows = st.session_state.get("wf_run_windows", [8, 9, 10, 11, 12])
+        wf_windows = st.session_state.get("wf_run_windows", [8, 9, 10, 11, 12, 13, 14])
         wf_method = st.session_state.get("wf_run_method", "빈도 기반")
         wf_min_sample = st.session_state.get("wf_run_min_sample", 15)
         wf_thresh_range = st.session_state.get("wf_run_thresh_range", (50, 65, 1))

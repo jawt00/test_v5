@@ -20,11 +20,14 @@ from change_point_prediction_module import (
     load_preprocessed_grid_strings_cp,
     get_stored_predictions_change_point_count,
 )
+from svg_parser_module import get_change_point_db_connection
 from change_point_hypothesis_module import (
     list_hypotheses,
     get_hypothesis,
     batch_validate_hypothesis_cp,
     batch_validate_threshold_skip_anchor_priority_cp,
+    batch_validate_first_anchor_extended_window_v2_cp,
+    batch_validate_first_anchor_extended_window_v3_cp,
     HYPOTHESIS_REGISTRY,
 )
 
@@ -152,8 +155,20 @@ def main():
         with col2:
             method_sim = st.selectbox("예측 방법", ["빈도 기반", "가중치 기반", "안전 우선"], key="method")
         
+        # 데이터 분리 설명
+        if cutoff_sim is not None:
+            st.info(f"📊 **데이터 분리**: ID {cutoff_sim} 이전 = 학습 데이터, ID {cutoff_sim} 이후 = 검증 데이터 (모두 검증)")
+        else:
+            st.info("📊 **데이터 분리**: cutoff를 선택하면 이전은 학습 데이터, 이후는 검증 데이터로 사용됩니다.")
+        
         # threshold_skip_anchor_priority 가설인 경우 특별 처리
         is_threshold_skip_anchor_priority = (selected_hypothesis_name == "threshold_skip_anchor_priority")
+        # first_anchor_extended_window 가설인 경우 특별 처리
+        is_first_anchor_extended = (selected_hypothesis_name == "first_anchor_extended_window")
+        # first_anchor_extended_window_v2 가설인 경우 특별 처리
+        is_first_anchor_extended_v2 = (selected_hypothesis_name == "first_anchor_extended_window_v2")
+        # first_anchor_extended_window_v3 가설인 경우 특별 처리
+        is_first_anchor_extended_v3 = (selected_hypothesis_name == "first_anchor_extended_window_v3")
         
         if is_threshold_skip_anchor_priority:
             st.markdown("#### 윈도우 크기 선택 및 임계값 설정")
@@ -186,6 +201,93 @@ def main():
             ws = list(window_thresholds.keys())
             ws.sort()
             hypothesis_config = {"window_thresholds": window_thresholds}
+        elif is_first_anchor_extended:
+            st.markdown("#### 윈도우 크기 (9-14)")
+            st.info("📌 첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 신뢰도 기반으로 검증합니다.")
+            
+            col_w1, col_w2, col_w3, col_w4, col_w5, col_w6 = st.columns(6)
+            with col_w1:
+                w9 = st.checkbox("9", True, key="w9_extended")
+            with col_w2:
+                w10 = st.checkbox("10", True, key="w10_extended")
+            with col_w3:
+                w11 = st.checkbox("11", True, key="w11_extended")
+            with col_w4:
+                w12 = st.checkbox("12", True, key="w12_extended")
+            with col_w5:
+                w13 = st.checkbox("13", True, key="w13_extended")
+            with col_w6:
+                w14 = st.checkbox("14", True, key="w14_extended")
+            
+            ws = []
+            if w9: ws.append(9)
+            if w10: ws.append(10)
+            if w11: ws.append(11)
+            if w12: ws.append(12)
+            if w13: ws.append(13)
+            if w14: ws.append(14)
+            
+            st.markdown("#### 임계값")
+            thresh_sim = st.number_input("임계값", 0, 100, 0, key="thresh_extended")
+            hypothesis_config = {}
+        elif is_first_anchor_extended_v2:
+            st.markdown("#### 윈도우 크기 (9-14)")
+            st.info("📌 첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 신뢰도 기반으로 검증합니다. (V2 독립 구현)")
+            
+            col_w1, col_w2, col_w3, col_w4, col_w5, col_w6 = st.columns(6)
+            with col_w1:
+                w9 = st.checkbox("9", True, key="w9_extended_v2")
+            with col_w2:
+                w10 = st.checkbox("10", True, key="w10_extended_v2")
+            with col_w3:
+                w11 = st.checkbox("11", True, key="w11_extended_v2")
+            with col_w4:
+                w12 = st.checkbox("12", True, key="w12_extended_v2")
+            with col_w5:
+                w13 = st.checkbox("13", True, key="w13_extended_v2")
+            with col_w6:
+                w14 = st.checkbox("14", True, key="w14_extended_v2")
+            
+            ws = []
+            if w9: ws.append(9)
+            if w10: ws.append(10)
+            if w11: ws.append(11)
+            if w12: ws.append(12)
+            if w13: ws.append(13)
+            if w14: ws.append(14)
+            
+            st.markdown("#### 임계값")
+            thresh_sim = st.number_input("임계값", 0, 100, 0, key="thresh_extended_v2")
+            hypothesis_config = {}
+        elif is_first_anchor_extended_v3:
+            st.markdown("#### 윈도우 크기 (9-14)")
+            st.info("📌 첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 신뢰도 기반으로 검증합니다. (V3 - V2 복제, 수정 가능)")
+            
+            col_w1, col_w2, col_w3, col_w4, col_w5, col_w6 = st.columns(6)
+            with col_w1:
+                w9 = st.checkbox("9", True, key="w9_extended_v3")
+            with col_w2:
+                w10 = st.checkbox("10", True, key="w10_extended_v3")
+            with col_w3:
+                w11 = st.checkbox("11", True, key="w11_extended_v3")
+            with col_w4:
+                w12 = st.checkbox("12", True, key="w12_extended_v3")
+            with col_w5:
+                w13 = st.checkbox("13", True, key="w13_extended_v3")
+            with col_w6:
+                w14 = st.checkbox("14", True, key="w14_extended_v3")
+            
+            ws = []
+            if w9: ws.append(9)
+            if w10: ws.append(10)
+            if w11: ws.append(11)
+            if w12: ws.append(12)
+            if w13: ws.append(13)
+            if w14: ws.append(14)
+            
+            st.markdown("#### 임계값")
+            thresh_sim = st.number_input("임계값", 0, 100, 0, key="thresh_extended_v3")
+            hypothesis_config = {}
         else:
             st.markdown("#### 윈도우 크기")
             col_w1, col_w2, col_w3, col_w4, col_w5 = st.columns(5)
@@ -225,7 +327,39 @@ def main():
                 hypothesis_config = {}
         
         if st.button("시뮬레이션 실행", type="primary", use_container_width=True):
-            if is_threshold_skip_anchor_priority:
+            if is_first_anchor_extended_v3:
+                # V3 독립 검증 함수 사용
+                if not ws:
+                    st.warning("최소 하나의 윈도우를 선택하세요.")
+                elif n_stored == 0:
+                    st.warning("예측값을 먼저 생성하세요.")
+                else:
+                    st.session_state["test_mode"] = "single"
+                    st.session_state["test_hypothesis"] = selected_hypothesis_name
+                    st.session_state["test_config"] = hypothesis_config
+                    st.session_state["test_cutoff"] = cutoff_sim if cutoff_sim is not None else 0
+                    st.session_state["test_ws"] = ws
+                    st.session_state["test_method"] = method_sim
+                    st.session_state["test_thresh"] = thresh_sim
+                    st.session_state["test_results"] = None
+                    st.rerun()
+            elif is_first_anchor_extended_v2:
+                # V2 독립 검증 함수 사용
+                if not ws:
+                    st.warning("최소 하나의 윈도우를 선택하세요.")
+                elif n_stored == 0:
+                    st.warning("예측값을 먼저 생성하세요.")
+                else:
+                    st.session_state["test_mode"] = "single"
+                    st.session_state["test_hypothesis"] = selected_hypothesis_name
+                    st.session_state["test_config"] = hypothesis_config
+                    st.session_state["test_cutoff"] = cutoff_sim if cutoff_sim is not None else 0
+                    st.session_state["test_ws"] = ws
+                    st.session_state["test_method"] = method_sim
+                    st.session_state["test_thresh"] = thresh_sim
+                    st.session_state["test_results"] = None
+                    st.rerun()
+            elif is_threshold_skip_anchor_priority:
                 # 특별한 검증 함수 사용
                 if not ws:
                     st.warning("최소 하나의 윈도우를 선택하세요.")
@@ -288,6 +422,12 @@ def main():
                 cutoff_sim = cutoff_opts[idx_cutoff]
             with col2:
                 method_sim = st.selectbox("예측 방법", ["빈도 기반", "가중치 기반", "안전 우선"], key="method_compare")
+            
+            # 데이터 분리 설명
+            if cutoff_sim is not None:
+                st.info(f"📊 **데이터 분리**: ID {cutoff_sim} 이전 = 학습 데이터, ID {cutoff_sim} 이후 = 검증 데이터 (모두 검증)")
+            else:
+                st.info("📊 **데이터 분리**: cutoff를 선택하면 이전은 학습 데이터, 이후는 검증 데이터로 사용됩니다.")
             
             # threshold_skip_anchor_priority 가설이 포함되어 있는지 확인
             has_threshold_skip = "threshold_skip_anchor_priority" in selected_hypotheses
@@ -401,21 +541,63 @@ def main():
             if not rr:
                 st.info("검증 결과가 없습니다.")
             else:
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
-                    st.metric("최대 연속 불일치", f"{sm.get('max_consecutive_failures', 0)}회")
+                    max_failures = sm.get('max_consecutive_failures', 0)
+                    st.metric("최대 연속 불일치", f"{max_failures}회", help="전체 검증 중 가장 많이 연속으로 틀린 횟수")
                 with col2:
-                    st.metric("평균 정확도", f"{sm.get('avg_accuracy', 0):.2f}%")
+                    st.metric("평균 최대 연속 불일치", f"{sm.get('avg_max_consecutive_failures', 0):.2f}회", help="각 grid_string의 최대 연속 불일치의 평균")
                 with col3:
-                    st.metric("총 예측 횟수", f"{sm.get('total_predictions', 0):,}")
+                    st.metric("평균 정확도", f"{sm.get('avg_accuracy', 0):.2f}%")
                 with col4:
+                    st.metric("총 예측 횟수", f"{sm.get('total_predictions', 0):,}")
+                with col5:
                     st.metric("스킵 횟수", f"{sm.get('total_skipped', 0):,}")
                 
+                # 최대 연속 불일치별 케이스 개수 통계
+                st.markdown("#### 최대 연속 불일치별 케이스 개수")
+                failure_counts = {}
+                for r in rr:
+                    failures = r["max_consecutive_failures"]
+                    failure_counts[failures] = failure_counts.get(failures, 0) + 1
+                
+                failure_stats = []
+                for failures in sorted(failure_counts.keys(), reverse=True):
+                    failure_stats.append({
+                        "최대 연속 불일치": f"{failures}회",
+                        "케이스 개수": failure_counts[failures],
+                        "비율": f"{failure_counts[failures] / len(rr) * 100:.1f}%"
+                    })
+                
+                if failure_stats:
+                    st.dataframe(pd.DataFrame(failure_stats), use_container_width=True, hide_index=True)
+                
                 st.markdown("#### 상세 결과")
+                # grid_string 조회를 위한 딕셔너리 생성
+                grid_string_dict = {}
+                if len(rr) > 0:
+                    grid_string_ids = [r["grid_string_id"] for r in rr]
+                    conn = get_change_point_db_connection()
+                    try:
+                        df_grid = pd.read_sql_query(
+                            "SELECT id, grid_string FROM preprocessed_grid_strings WHERE id IN ({})".format(
+                                ",".join("?" * len(grid_string_ids))
+                            ),
+                            conn,
+                            params=grid_string_ids,
+                        )
+                        for _, row in df_grid.iterrows():
+                            grid_string_dict[row["id"]] = row["grid_string"]
+                    finally:
+                        conn.close()
+                
                 rows = []
                 for r in rr:
+                    gid = r["grid_string_id"]
+                    grid_string = grid_string_dict.get(gid, "N/A")
                     rows.append({
-                        "grid_string_id": r["grid_string_id"],
+                        "grid_string_id": gid,
+                        "전체 스트링": grid_string,
                         "최대 연속 불일치": r["max_consecutive_failures"],
                         "정확도": f"{r['accuracy']:.2f}%",
                         "예측 횟수": r["total_predictions"],
@@ -447,8 +629,11 @@ def main():
                                 match_status = '✅' if is_correct else ('❌' if is_correct is False else '-')
                                 predicted = entry.get('predicted')
                                 skipped = entry.get('skipped', False)
+                                skip_reason = entry.get('skip_reason', '')
                                 
                                 skipped_mark = '⏭️' if skipped else ''
+                                if skipped and skip_reason:
+                                    skipped_mark = f'⏭️ ({skip_reason})'
                                 predicted_display = f"{predicted}{skipped_mark}" if predicted else f"-{skipped_mark}" if skipped else "-"
                                 
                                 history_data.append({
@@ -462,6 +647,7 @@ def main():
                                     '일치': match_status,
                                     '신뢰도': f"{entry.get('confidence', 0):.1f}%" if predicted else '-',
                                     '선택 윈도우': entry.get('selected_window_size', ''),
+                                    '스킵 사유': skip_reason if skipped else '',
                                 })
                             
                             if len(history_data) > 0:
@@ -532,21 +718,64 @@ def main():
                     rr = res.get("results", [])
                     sm = res.get("summary", {})
                     
-                    col1, col2, col3, col4 = st.columns(4)
+                    col1, col2, col3, col4, col5 = st.columns(5)
                     with col1:
-                        st.metric("최대 연속 불일치", f"{sm.get('max_consecutive_failures', 0)}회")
+                        max_failures = sm.get('max_consecutive_failures', 0)
+                        st.metric("최대 연속 불일치", f"{max_failures}회", help="전체 검증 중 가장 많이 연속으로 틀린 횟수")
                     with col2:
-                        st.metric("평균 정확도", f"{sm.get('avg_accuracy', 0):.2f}%")
+                        st.metric("평균 최대 연속 불일치", f"{sm.get('avg_max_consecutive_failures', 0):.2f}회", help="각 grid_string의 최대 연속 불일치의 평균")
                     with col3:
-                        st.metric("총 예측 횟수", f"{sm.get('total_predictions', 0):,}")
+                        st.metric("평균 정확도", f"{sm.get('avg_accuracy', 0):.2f}%")
                     with col4:
+                        st.metric("총 예측 횟수", f"{sm.get('total_predictions', 0):,}")
+                    with col5:
                         st.metric("스킵 횟수", f"{sm.get('total_skipped', 0):,}")
                     
+                    # 최대 연속 불일치별 케이스 개수 통계
                     if rr:
+                        st.markdown("##### 최대 연속 불일치별 케이스 개수")
+                        failure_counts = {}
+                        for r in rr:
+                            failures = r["max_consecutive_failures"]
+                            failure_counts[failures] = failure_counts.get(failures, 0) + 1
+                        
+                        failure_stats = []
+                        for failures in sorted(failure_counts.keys(), reverse=True):
+                            failure_stats.append({
+                                "최대 연속 불일치": f"{failures}회",
+                                "케이스 개수": failure_counts[failures],
+                                "비율": f"{failure_counts[failures] / len(rr) * 100:.1f}%"
+                            })
+                        
+                        if failure_stats:
+                            st.dataframe(pd.DataFrame(failure_stats), use_container_width=True, hide_index=True)
+                    
+                    if rr:
+                        # grid_string 조회를 위한 딕셔너리 생성
+                        grid_string_dict = {}
+                        if len(rr) > 0:
+                            grid_string_ids = [r["grid_string_id"] for r in rr[:10]]
+                            conn = get_change_point_db_connection()
+                            try:
+                                df_grid = pd.read_sql_query(
+                                    "SELECT id, grid_string FROM preprocessed_grid_strings WHERE id IN ({})".format(
+                                        ",".join("?" * len(grid_string_ids))
+                                    ),
+                                    conn,
+                                    params=grid_string_ids,
+                                )
+                                for _, row in df_grid.iterrows():
+                                    grid_string_dict[row["id"]] = row["grid_string"]
+                            finally:
+                                conn.close()
+                        
                         detail_rows = []
                         for r in rr[:10]:  # 처음 10개만 표시
+                            gid = r["grid_string_id"]
+                            grid_string = grid_string_dict.get(gid, "N/A")
                             detail_rows.append({
-                                "grid_string_id": r["grid_string_id"],
+                                "grid_string_id": gid,
+                                "전체 스트링": grid_string,
                                 "최대 연속 불일치": r["max_consecutive_failures"],
                                 "정확도": f"{r['accuracy']:.2f}%",
                                 "예측 횟수": r["total_predictions"],
@@ -578,8 +807,11 @@ def main():
                                         match_status = '✅' if is_correct else ('❌' if is_correct is False else '-')
                                         predicted = entry.get('predicted')
                                         skipped = entry.get('skipped', False)
+                                        skip_reason = entry.get('skip_reason', '')
                                         
                                         skipped_mark = '⏭️' if skipped else ''
+                                        if skipped and skip_reason:
+                                            skipped_mark = f'⏭️ ({skip_reason})'
                                         predicted_display = f"{predicted}{skipped_mark}" if predicted else f"-{skipped_mark}" if skipped else "-"
                                         
                                         history_data.append({
@@ -593,6 +825,7 @@ def main():
                                             '일치': match_status,
                                             '신뢰도': f"{entry.get('confidence', 0):.1f}%" if predicted else '-',
                                             '선택 윈도우': entry.get('selected_window_size', ''),
+                                            '스킵 사유': skip_reason if skipped else '',
                                         })
                                     
                                     if len(history_data) > 0:
@@ -654,8 +887,24 @@ def main():
                     
                     status.text(f"가설 '{get_hypothesis(hyp_name).get_name()}' 실행 중...")
                     
+                    # first_anchor_extended_window_v3 가설인 경우 독립 검증 함수 사용
+                    if hyp_name == "first_anchor_extended_window_v3":
+                        res = batch_validate_first_anchor_extended_window_v3_cp(
+                            cutoff_sim,
+                            window_sizes=tuple(ws),
+                            method=method_sim,
+                            threshold=thresh_sim,
+                        )
+                    # first_anchor_extended_window_v2 가설인 경우 독립 검증 함수 사용
+                    elif hyp_name == "first_anchor_extended_window_v2":
+                        res = batch_validate_first_anchor_extended_window_v2_cp(
+                            cutoff_sim,
+                            window_sizes=tuple(ws),
+                            method=method_sim,
+                            threshold=thresh_sim,
+                        )
                     # threshold_skip_anchor_priority 가설인 경우 특별한 검증 함수 사용
-                    if hyp_name == "threshold_skip_anchor_priority":
+                    elif hyp_name == "threshold_skip_anchor_priority":
                         window_thresholds = hyp_config.get("window_thresholds", {})
                         res = batch_validate_threshold_skip_anchor_priority_cp(
                             cutoff_sim,
@@ -690,8 +939,24 @@ def main():
                         status.text(f"가설 '{hyp_instance.get_name()}' 실행 중... ({i+1}/{total})")
                         bar.progress((i + 0.5) / total)
                         
+                        # first_anchor_extended_window_v3 가설인 경우 독립 검증 함수 사용
+                        if hyp_name == "first_anchor_extended_window_v3":
+                            res = batch_validate_first_anchor_extended_window_v3_cp(
+                                cutoff_sim,
+                                window_sizes=tuple(ws),
+                                method=method_sim,
+                                threshold=thresh_sim,
+                            )
+                        # first_anchor_extended_window_v2 가설인 경우 독립 검증 함수 사용
+                        elif hyp_name == "first_anchor_extended_window_v2":
+                            res = batch_validate_first_anchor_extended_window_v2_cp(
+                                cutoff_sim,
+                                window_sizes=tuple(ws),
+                                method=method_sim,
+                                threshold=thresh_sim,
+                            )
                         # threshold_skip_anchor_priority 가설인 경우 특별한 검증 함수 사용
-                        if hyp_name == "threshold_skip_anchor_priority":
+                        elif hyp_name == "threshold_skip_anchor_priority":
                             hyp_config = configs.get(hyp_name, {})
                             window_thresholds = hyp_config.get("window_thresholds", {})
                             res = batch_validate_threshold_skip_anchor_priority_cp(

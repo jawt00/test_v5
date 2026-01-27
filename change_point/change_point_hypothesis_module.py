@@ -336,6 +336,253 @@ class LargeWindowOnlyHypothesis(Hypothesis):
         return {}
 
 
+class FirstAnchorExtendedWindowHypothesis(Hypothesis):
+    """첫 앵커 확장 윈도우 가설 - 첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 신뢰도 기반 검증"""
+    
+    def __init__(self):
+        pass
+    
+    def predict(self, grid_string, position, window_sizes, method, threshold, **kwargs):
+        """
+        첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 사용하여 예측
+        검증 함수에서 첫 번째 앵커에서 각 윈도우 크기별로 호출되므로,
+        여기서는 해당 position에서 사용 가능한 모든 확장 윈도우의 예측값을 조회하여 최고 신뢰도 선택
+        """
+        # 확장 윈도우만 필터링 (9 이상 14 이하)
+        extended_windows = [w for w in window_sizes if 9 <= w <= 14]
+        if not extended_windows:
+            return {
+                "predicted": None,
+                "confidence": 0.0,
+                "window_size": None,
+                "prefix": None,
+                "all_predictions": [],
+                "skipped": False,
+            }
+        
+        conn = get_change_point_db_connection()
+        try:
+            all_predictions = []
+            for window_size in extended_windows:
+                prefix_len = window_size - 1
+                if position < prefix_len:
+                    continue
+                
+                prefix = grid_string[position - prefix_len : position]
+                q = """
+                    SELECT predicted_value, confidence, b_ratio, p_ratio
+                    FROM stored_predictions_change_point
+                    WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
+                    LIMIT 1
+                """
+                df = pd.read_sql_query(q, conn, params=[window_size, prefix, method, threshold])
+                if len(df) == 0:
+                    continue
+                row = df.iloc[0]
+                all_predictions.append({
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": row["predicted_value"],
+                    "confidence": row["confidence"],
+                    "b_ratio": row["b_ratio"],
+                    "p_ratio": row["p_ratio"],
+                })
+            if not all_predictions:
+                return {
+                    "predicted": None,
+                    "confidence": 0.0,
+                    "window_size": None,
+                    "prefix": None,
+                    "all_predictions": [],
+                    "skipped": False,
+                }
+            # 신뢰도 기반으로 최고 신뢰도 선택
+            best = max(all_predictions, key=lambda x: x["confidence"])
+            return {
+                "predicted": best["predicted"],
+                "confidence": best["confidence"],
+                "window_size": best["window_size"],
+                "prefix": best["prefix"],
+                "all_predictions": all_predictions,
+                "skipped": False,
+            }
+        finally:
+            conn.close()
+    
+    def get_name(self):
+        return "첫 앵커 확장 윈도우 검증 (9-14)"
+    
+    def get_description(self):
+        return "첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 신뢰도 기반으로 검증합니다."
+    
+    def get_config_schema(self):
+        return {}
+
+
+class FirstAnchorExtendedWindowHypothesisV2(Hypothesis):
+    """첫 앵커 확장 윈도우 가설 V2 - 첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 신뢰도 기반 검증 (독립 구현)"""
+    
+    def __init__(self):
+        pass
+    
+    def predict(self, grid_string, position, window_sizes, method, threshold, **kwargs):
+        """
+        첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 사용하여 예측
+        신뢰도 기반으로 최고 신뢰도 예측값 선택
+        """
+        # 확장 윈도우만 필터링 (9 이상 14 이하)
+        extended_windows = [w for w in window_sizes if 9 <= w <= 14]
+        if not extended_windows:
+            return {
+                "predicted": None,
+                "confidence": 0.0,
+                "window_size": None,
+                "prefix": None,
+                "all_predictions": [],
+                "skipped": False,
+            }
+        
+        conn = get_change_point_db_connection()
+        try:
+            all_predictions = []
+            for window_size in extended_windows:
+                prefix_len = window_size - 1
+                if position < prefix_len:
+                    continue
+                
+                prefix = grid_string[position - prefix_len : position]
+                q = """
+                    SELECT predicted_value, confidence, b_ratio, p_ratio
+                    FROM stored_predictions_change_point
+                    WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
+                    LIMIT 1
+                """
+                df = pd.read_sql_query(q, conn, params=[window_size, prefix, method, threshold])
+                if len(df) == 0:
+                    continue
+                row = df.iloc[0]
+                all_predictions.append({
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": row["predicted_value"],
+                    "confidence": row["confidence"],
+                    "b_ratio": row["b_ratio"],
+                    "p_ratio": row["p_ratio"],
+                })
+            if not all_predictions:
+                return {
+                    "predicted": None,
+                    "confidence": 0.0,
+                    "window_size": None,
+                    "prefix": None,
+                    "all_predictions": [],
+                    "skipped": False,
+                }
+            # 신뢰도 기반으로 최고 신뢰도 선택
+            best = max(all_predictions, key=lambda x: x["confidence"])
+            return {
+                "predicted": best["predicted"],
+                "confidence": best["confidence"],
+                "window_size": best["window_size"],
+                "prefix": best["prefix"],
+                "all_predictions": all_predictions,
+                "skipped": False,
+            }
+        finally:
+            conn.close()
+    
+    def get_name(self):
+        return "첫 앵커 확장 윈도우 검증 V2 (9-14)"
+    
+    def get_description(self):
+        return "첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 신뢰도 기반으로 검증합니다. (독립 구현)"
+    
+    def get_config_schema(self):
+        return {}
+
+
+class FirstAnchorExtendedWindowHypothesisV3(Hypothesis):
+    """첫 앵커 확장 윈도우 가설 V3 - 첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 신뢰도 기반 검증 (V2 복제)"""
+    
+    def __init__(self):
+        pass
+    
+    def predict(self, grid_string, position, window_sizes, method, threshold, **kwargs):
+        """
+        첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 사용하여 예측
+        신뢰도 기반으로 최고 신뢰도 예측값 선택
+        """
+        # 확장 윈도우만 필터링 (9 이상 14 이하)
+        extended_windows = [w for w in window_sizes if 9 <= w <= 14]
+        if not extended_windows:
+            return {
+                "predicted": None,
+                "confidence": 0.0,
+                "window_size": None,
+                "prefix": None,
+                "all_predictions": [],
+                "skipped": False,
+            }
+        
+        conn = get_change_point_db_connection()
+        try:
+            all_predictions = []
+            for window_size in extended_windows:
+                prefix_len = window_size - 1
+                if position < prefix_len:
+                    continue
+                
+                prefix = grid_string[position - prefix_len : position]
+                q = """
+                    SELECT predicted_value, confidence, b_ratio, p_ratio
+                    FROM stored_predictions_change_point
+                    WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
+                    LIMIT 1
+                """
+                df = pd.read_sql_query(q, conn, params=[window_size, prefix, method, threshold])
+                if len(df) == 0:
+                    continue
+                row = df.iloc[0]
+                all_predictions.append({
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": row["predicted_value"],
+                    "confidence": row["confidence"],
+                    "b_ratio": row["b_ratio"],
+                    "p_ratio": row["p_ratio"],
+                })
+            if not all_predictions:
+                return {
+                    "predicted": None,
+                    "confidence": 0.0,
+                    "window_size": None,
+                    "prefix": None,
+                    "all_predictions": [],
+                    "skipped": False,
+                }
+            # 신뢰도 기반으로 최고 신뢰도 선택
+            best = max(all_predictions, key=lambda x: x["confidence"])
+            return {
+                "predicted": best["predicted"],
+                "confidence": best["confidence"],
+                "window_size": best["window_size"],
+                "prefix": best["prefix"],
+                "all_predictions": all_predictions,
+                "skipped": False,
+            }
+        finally:
+            conn.close()
+    
+    def get_name(self):
+        return "첫 앵커 확장 윈도우 검증 V3 (9-14)"
+    
+    def get_description(self):
+        return "첫 번째 앵커에서 윈도우 크기 9, 10, 11, 12, 13, 14를 신뢰도 기반으로 검증합니다. (V2 복제, 수정 가능)"
+    
+    def get_config_schema(self):
+        return {}
+
+
 class ThresholdSkipAnchorPriorityHypothesis(Hypothesis):
     """임계점 스킵 + 앵커 우선순위 가설 - 임계점 미만 스킵, 앵커 중첩 시 이전 앵커 우선"""
     
@@ -663,6 +910,9 @@ class ThresholdSkipAnchorPriorityExtendedHypothesis(Hypothesis):
 register_hypothesis("best_confidence", BestConfidenceHypothesis)
 register_hypothesis("confidence_skip", ConfidenceSkipHypothesis)
 register_hypothesis("large_window_only", LargeWindowOnlyHypothesis)
+register_hypothesis("first_anchor_extended_window", FirstAnchorExtendedWindowHypothesis)
+register_hypothesis("first_anchor_extended_window_v2", FirstAnchorExtendedWindowHypothesisV2)
+register_hypothesis("first_anchor_extended_window_v3", FirstAnchorExtendedWindowHypothesisV3)
 register_hypothesis("threshold_skip_anchor_priority", ThresholdSkipAnchorPriorityHypothesis)
 register_hypothesis("threshold_skip_anchor_priority_extended", ThresholdSkipAnchorPriorityExtendedHypothesis)
 
@@ -866,13 +1116,12 @@ def batch_validate_hypothesis_cp(
     가설 기반 배치 검증 (cutoff 이후 grid_string)
     
     Args:
-        cutoff_grid_string_id: cutoff ID (이 ID 이후 검증)
+        cutoff_grid_string_id: cutoff ID (이 ID 이전 = 학습 데이터, 이후 = 검증 데이터)
         hypothesis: Hypothesis 인스턴스
         window_sizes: 윈도우 크기 목록
         method: 예측 방법
         threshold: 임계값
-        train_ratio: 학습 데이터 비율 (0.0 ~ 1.0, 예: 0.6 = 60% 학습 / 40% 검증)
-                    None이면 cutoff 이후 모든 데이터 검증
+        train_ratio: 사용하지 않음 (호환성을 위해 유지, 무시됨)
         stop_on_match: True이면 각 grid_string 검증 중 일치하는 결과가 나오면 종료
         **hypothesis_params: 가설별 추가 파라미터
         
@@ -881,17 +1130,26 @@ def batch_validate_hypothesis_cp(
             "results": 검증 결과 목록,
             "summary": 요약 통계,
             "grid_string_ids": 검증된 grid_string ID 목록,
-            "train_grid_string_ids": 학습용 grid_string ID 목록 (train_ratio가 설정된 경우)
+            "train_grid_string_ids": 학습용 grid_string ID 목록 (cutoff 이전)
         }
     """
     conn = get_change_point_db_connection()
     try:
-        df = pd.read_sql_query(
+        # cutoff 이후의 모든 grid_string ID 조회 (검증 데이터)
+        df_test = pd.read_sql_query(
             "SELECT id FROM preprocessed_grid_strings WHERE id > ? ORDER BY id",
             conn,
             params=[cutoff_grid_string_id],
         )
-        if len(df) == 0:
+        
+        # cutoff 이전의 모든 grid_string ID 조회 (학습 데이터)
+        df_train = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        
+        if len(df_test) == 0:
             return {
                 "results": [],
                 "summary": {
@@ -905,18 +1163,12 @@ def batch_validate_hypothesis_cp(
                     "total_skipped": 0,
                 },
                 "grid_string_ids": [],
-                "train_grid_string_ids": [],
+                "train_grid_string_ids": df_train["id"].tolist() if len(df_train) > 0 else [],
             }
-        all_gids = df["id"].tolist()
         
-        # 학습 비율이 설정된 경우 데이터 분할
-        if train_ratio is not None and 0.0 < train_ratio < 1.0:
-            split_idx = int(len(all_gids) * train_ratio)
-            train_gids = all_gids[:split_idx]
-            test_gids = all_gids[split_idx:]
-        else:
-            train_gids = []
-            test_gids = all_gids
+        # cutoff 이후의 모든 데이터를 검증 (train_ratio 무시)
+        test_gids = df_test["id"].tolist()
+        train_gids = df_train["id"].tolist() if len(df_train) > 0 else []
         
         results = []
         for gid in test_gids:
@@ -1392,13 +1644,12 @@ def batch_validate_threshold_skip_anchor_priority_cp(
     임계점 스킵 + 앵커 우선순위 배치 검증 (cutoff 이후 grid_string)
     
     Args:
-        cutoff_grid_string_id: cutoff ID (이 ID 이후 검증)
+        cutoff_grid_string_id: cutoff ID (이 ID 이전 = 학습 데이터, 이후 = 검증 데이터)
         window_sizes: 윈도우 크기 목록
         method: 예측 방법
         threshold: 기본 임계값 (window_thresholds가 없을 때 사용)
         window_thresholds: 윈도우 크기별 임계값 딕셔너리 {window_size: threshold}
-        train_ratio: 학습 데이터 비율 (0.0 ~ 1.0, 예: 0.6 = 60% 학습 / 40% 검증)
-                    None이면 cutoff 이후 모든 데이터 검증
+        train_ratio: 사용하지 않음 (호환성을 위해 유지, 무시됨)
         stop_on_match: True이면 각 grid_string 검증 중 일치하는 결과가 나오면 종료
         
     Returns:
@@ -1406,17 +1657,26 @@ def batch_validate_threshold_skip_anchor_priority_cp(
             "results": 검증 결과 목록,
             "summary": 요약 통계,
             "grid_string_ids": 검증된 grid_string ID 목록,
-            "train_grid_string_ids": 학습용 grid_string ID 목록 (train_ratio가 설정된 경우)
+            "train_grid_string_ids": 학습용 grid_string ID 목록 (cutoff 이전)
         }
     """
     conn = get_change_point_db_connection()
     try:
-        df = pd.read_sql_query(
+        # cutoff 이후의 모든 grid_string ID 조회 (검증 데이터)
+        df_test = pd.read_sql_query(
             "SELECT id FROM preprocessed_grid_strings WHERE id > ? ORDER BY id",
             conn,
             params=[cutoff_grid_string_id],
         )
-        if len(df) == 0:
+        
+        # cutoff 이전의 모든 grid_string ID 조회 (학습 데이터)
+        df_train = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        
+        if len(df_test) == 0:
             return {
                 "results": [],
                 "summary": {
@@ -1430,18 +1690,12 @@ def batch_validate_threshold_skip_anchor_priority_cp(
                     "total_skipped": 0,
                 },
                 "grid_string_ids": [],
-                "train_grid_string_ids": [],
+                "train_grid_string_ids": df_train["id"].tolist() if len(df_train) > 0 else [],
             }
-        all_gids = df["id"].tolist()
         
-        # 학습 비율이 설정된 경우 데이터 분할
-        if train_ratio is not None and 0.0 < train_ratio < 1.0:
-            split_idx = int(len(all_gids) * train_ratio)
-            train_gids = all_gids[:split_idx]
-            test_gids = all_gids[split_idx:]
-        else:
-            train_gids = []
-            test_gids = all_gids
+        # cutoff 이후의 모든 데이터를 검증 (train_ratio 무시)
+        test_gids = df_test["id"].tolist()
+        train_gids = df_train["id"].tolist() if len(df_train) > 0 else []
         
         results = []
         for gid in test_gids:
@@ -1498,13 +1752,12 @@ def batch_validate_threshold_skip_anchor_priority_extended_cp(
     임계점 스킵 + 앵커 우선순위 확장 배치 검증 (cutoff 이후 grid_string)
     
     Args:
-        cutoff_grid_string_id: cutoff ID (이 ID 이후 검증)
+        cutoff_grid_string_id: cutoff ID (이 ID 이전 = 학습 데이터, 이후 = 검증 데이터)
         window_sizes: 윈도우 크기 목록
         method: 예측 방법
         threshold: 기본 임계값 (window_thresholds가 없을 때 사용)
         window_thresholds: 윈도우 크기별 임계값 딕셔너리 {window_size: threshold}
-        train_ratio: 학습 데이터 비율 (0.0 ~ 1.0, 예: 0.6 = 60% 학습 / 40% 검증)
-                    None이면 cutoff 이후 모든 데이터 검증
+        train_ratio: 사용하지 않음 (호환성을 위해 유지, 무시됨)
         stop_on_match: True이면 각 grid_string 검증 중 일치하는 결과가 나오면 종료
         additional_condition: 추가 조건 함수 (prediction_dict, actual_value) -> bool
         
@@ -1513,17 +1766,26 @@ def batch_validate_threshold_skip_anchor_priority_extended_cp(
             "results": 검증 결과 목록,
             "summary": 요약 통계,
             "grid_string_ids": 검증된 grid_string ID 목록,
-            "train_grid_string_ids": 학습용 grid_string ID 목록 (train_ratio가 설정된 경우)
+            "train_grid_string_ids": 학습용 grid_string ID 목록 (cutoff 이전)
         }
     """
     conn = get_change_point_db_connection()
     try:
-        df = pd.read_sql_query(
+        # cutoff 이후의 모든 grid_string ID 조회 (검증 데이터)
+        df_test = pd.read_sql_query(
             "SELECT id FROM preprocessed_grid_strings WHERE id > ? ORDER BY id",
             conn,
             params=[cutoff_grid_string_id],
         )
-        if len(df) == 0:
+        
+        # cutoff 이전의 모든 grid_string ID 조회 (학습 데이터)
+        df_train = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        
+        if len(df_test) == 0:
             return {
                 "results": [],
                 "summary": {
@@ -1537,18 +1799,12 @@ def batch_validate_threshold_skip_anchor_priority_extended_cp(
                     "total_skipped": 0,
                 },
                 "grid_string_ids": [],
-                "train_grid_string_ids": [],
+                "train_grid_string_ids": df_train["id"].tolist() if len(df_train) > 0 else [],
             }
-        all_gids = df["id"].tolist()
         
-        # 학습 비율이 설정된 경우 데이터 분할
-        if train_ratio is not None and 0.0 < train_ratio < 1.0:
-            split_idx = int(len(all_gids) * train_ratio)
-            train_gids = all_gids[:split_idx]
-            test_gids = all_gids[split_idx:]
-        else:
-            train_gids = []
-            test_gids = all_gids
+        # cutoff 이후의 모든 데이터를 검증 (train_ratio 무시)
+        test_gids = df_test["id"].tolist()
+        train_gids = df_train["id"].tolist() if len(df_train) > 0 else []
         
         results = []
         for gid in test_gids:
@@ -1693,3 +1949,706 @@ def batch_validate_multiple_train_ratios(
         "results_by_ratio": results_by_ratio,
         "summary_by_ratio": summary_by_ratio,
     }
+
+
+# ============================================================================
+# 첫 앵커 확장 윈도우 V2 검증 함수 (독립 구현)
+# ============================================================================
+
+def validate_first_anchor_extended_window_v2_cp(
+    grid_string_id,
+    cutoff_grid_string_id,
+    window_sizes=(9, 10, 11, 12, 13, 14),
+    method="빈도 기반",
+    threshold=0,
+    stop_on_match=False,
+):
+    """
+    첫 앵커 확장 윈도우 V2 검증 함수 (독립 구현)
+    
+    - 첫 번째 앵커만 사용
+    - 첫 번째 앵커에서 윈도우 크기별로 각각 검증
+    - 각 윈도우 크기별 신뢰도 기반 예측값 비교
+    
+    Args:
+        grid_string_id: 검증할 grid_string ID
+        cutoff_grid_string_id: cutoff ID (사용하지 않지만 호환성을 위해 유지)
+        window_sizes: 윈도우 크기 목록 (기본값: 9, 10, 11, 12, 13, 14)
+        method: 예측 방법
+        threshold: 임계값
+        stop_on_match: True이면 일치하는 결과가 나오면 검증 종료
+        
+    Returns:
+        dict: 검증 결과
+    """
+    conn = get_change_point_db_connection()
+    try:
+        df = pd.read_sql_query(
+            "SELECT grid_string FROM preprocessed_grid_strings WHERE id = ?",
+            conn,
+            params=[grid_string_id],
+        )
+        if len(df) == 0:
+            return None
+        grid_string = df.iloc[0]["grid_string"]
+        max_ws = max(window_sizes)
+        if len(grid_string) < max_ws:
+            return {
+                "grid_string_id": grid_string_id,
+                "max_consecutive_failures": 0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+                "accuracy": 0.0,
+                "history": [],
+                "stopped_early": False,
+            }
+        
+        # Change-point Detection: 앵커 위치 수집
+        anchors = []
+        for i in range(len(grid_string) - 1):
+            if grid_string[i] != grid_string[i+1]:
+                anchors.append(i)
+        anchors = sorted(list(set(anchors)))
+        
+        # 첫 번째 앵커만 사용
+        if not anchors:
+            return {
+                "grid_string_id": grid_string_id,
+                "max_consecutive_failures": 0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+                "accuracy": 0.0,
+                "history": [],
+                "stopped_early": False,
+            }
+        
+        first_anchor = anchors[0]
+        history = []
+        consecutive_failures = 0
+        max_consecutive_failures = 0
+        total_steps = 0
+        total_failures = 0
+        total_predictions = 0
+        total_skipped = 0
+        stopped_early = False
+        
+        # 첫 번째 앵커에서 각 윈도우 크기별로 예측 수행
+        for window_size in window_sizes:
+            # 앵커 위치에서 window_size만큼 추출 가능한지 확인
+            if first_anchor + window_size > len(grid_string):
+                continue
+            
+            # 예측할 위치 (suffix 위치)
+            pos = first_anchor + window_size - 1
+            total_steps += 1
+            actual = grid_string[pos]
+            
+            # prefix 계산
+            prefix_len = window_size - 1
+            prefix = grid_string[pos - prefix_len : pos]
+            
+            # DB에서 예측값 조회
+            q = """
+                SELECT predicted_value, confidence, b_ratio, p_ratio
+                FROM stored_predictions_change_point
+                WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
+                LIMIT 1
+            """
+            df_pred = pd.read_sql_query(q, conn, params=[window_size, prefix, method, threshold])
+            
+            if len(df_pred) == 0:
+                # 예측값이 없으면 스킵 (예측 테이블에 값이 없음)
+                total_skipped += 1
+                history.append({
+                    "step": total_steps,
+                    "position": pos,
+                    "anchor": first_anchor,
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": None,
+                    "actual": actual,
+                    "is_correct": None,
+                    "confidence": 0.0,
+                    "selected_window_size": window_size,
+                    "all_predictions": [],
+                    "skipped": True,
+                    "skip_reason": "예측 테이블에 값 없음",  # 스킵 사유 추가
+                })
+                continue
+            
+            row = df_pred.iloc[0]
+            predicted = row["predicted_value"]
+            confidence = row["confidence"]
+            
+            # 예측 결과 비교
+            ok = predicted == actual
+            total_predictions += 1
+            
+            if not ok:
+                consecutive_failures += 1
+                total_failures += 1
+                if consecutive_failures > max_consecutive_failures:
+                    max_consecutive_failures = consecutive_failures
+            else:
+                consecutive_failures = 0
+            
+            history.append({
+                "step": total_steps,
+                "position": pos,
+                "anchor": first_anchor,
+                "window_size": window_size,
+                "prefix": prefix,
+                "predicted": predicted,
+                "actual": actual,
+                "is_correct": ok,
+                "confidence": confidence,
+                "selected_window_size": window_size,
+                "all_predictions": [{
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": predicted,
+                    "confidence": confidence,
+                    "b_ratio": row["b_ratio"],
+                    "p_ratio": row["p_ratio"],
+                }],
+                "skipped": False,
+            })
+            
+            # 일치하는 결과가 나오면 검증 종료
+            if stop_on_match and ok:
+                stopped_early = True
+                break
+        
+        acc = ((total_predictions - total_failures) / total_predictions * 100) if total_predictions > 0 else 0.0
+        return {
+            "grid_string_id": grid_string_id,
+            "max_consecutive_failures": max_consecutive_failures,
+            "total_steps": total_steps,
+            "total_failures": total_failures,
+            "total_predictions": total_predictions,
+            "total_skipped": total_skipped,
+            "accuracy": acc,
+            "history": history,
+            "stopped_early": stopped_early,
+        }
+    finally:
+        conn.close()
+
+
+def batch_validate_first_anchor_extended_window_v2_cp(
+    cutoff_grid_string_id,
+    window_sizes=(9, 10, 11, 12, 13, 14),
+    method="빈도 기반",
+    threshold=0,
+    stop_on_match=False,
+    auto_generate_predictions=True,
+):
+    """
+    첫 앵커 확장 윈도우 V2 배치 검증 (cutoff 이후 grid_string)
+    
+    **예측값 사용 방식:**
+    1. cutoff 이전 데이터(학습 데이터)로만 예측값 테이블 생성
+    2. 생성된 예측값으로 cutoff 이후 데이터(검증 데이터) 검증
+    
+    Args:
+        cutoff_grid_string_id: cutoff ID (이 ID 이전 = 학습 데이터, 이후 = 검증 데이터)
+        window_sizes: 윈도우 크기 목록 (기본값: 9, 10, 11, 12, 13, 14)
+        method: 예측 방법
+        threshold: 임계값 (예측값 생성 시 사용)
+        stop_on_match: True이면 각 grid_string 검증 중 일치하는 결과가 나오면 종료
+        auto_generate_predictions: True이면 cutoff 이전 데이터로 예측값 자동 생성
+        
+    Returns:
+        dict: {
+            "results": 검증 결과 목록,
+            "summary": 요약 통계,
+            "grid_string_ids": 검증된 grid_string ID 목록,
+            "train_grid_string_ids": 학습용 grid_string ID 목록 (cutoff 이전),
+            "predictions_generated": 예측값 생성 여부
+        }
+    """
+    from change_point_prediction_module import save_or_update_predictions_for_change_point_data
+    
+    # cutoff 이전 데이터로 예측값 테이블 생성 (학습 데이터 기반)
+    predictions_generated = False
+    if auto_generate_predictions:
+        try:
+            pred_result = save_or_update_predictions_for_change_point_data(
+                cutoff_grid_string_id=cutoff_grid_string_id,
+                window_sizes=window_sizes,
+                methods=(method,),
+                thresholds=(threshold,),
+                min_sample_count=15,
+            )
+            predictions_generated = True
+        except Exception as e:
+            # 예측값 생성 실패 시 경고만 출력하고 계속 진행
+            import warnings
+            warnings.warn(f"예측값 생성 실패: {e}. 기존 예측값을 사용합니다.")
+    
+    conn = get_change_point_db_connection()
+    try:
+        # cutoff 이후의 모든 grid_string ID 조회 (검증 데이터)
+        df_test = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id > ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        
+        # cutoff 이전의 모든 grid_string ID 조회 (학습 데이터)
+        df_train = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        
+        if len(df_test) == 0:
+            return {
+                "results": [],
+                "summary": {
+                    "total_grid_strings": 0,
+                    "avg_accuracy": 0.0,
+                    "max_consecutive_failures": 0,
+                    "avg_max_consecutive_failures": 0.0,
+                    "total_steps": 0,
+                    "total_failures": 0,
+                    "total_predictions": 0,
+                    "total_skipped": 0,
+                },
+                "grid_string_ids": [],
+                "train_grid_string_ids": df_train["id"].tolist() if len(df_train) > 0 else [],
+                "predictions_generated": predictions_generated,
+            }
+        
+        # cutoff 이후의 모든 데이터를 검증
+        test_gids = df_test["id"].tolist()
+        train_gids = df_train["id"].tolist() if len(df_train) > 0 else []
+        
+        results = []
+        for gid in test_gids:
+            r = validate_first_anchor_extended_window_v2_cp(
+                gid, cutoff_grid_string_id,
+                window_sizes=window_sizes,
+                method=method,
+                threshold=threshold,
+                stop_on_match=stop_on_match,
+            )
+            if r is not None:
+                results.append(r)
+        
+        if not results:
+            summary = {
+                "total_grid_strings": 0,
+                "avg_accuracy": 0.0,
+                "max_consecutive_failures": 0,
+                "avg_max_consecutive_failures": 0.0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+            }
+        else:
+            n = len(results)
+            summary = {
+                "total_grid_strings": n,
+                "avg_accuracy": sum(x["accuracy"] for x in results) / n,
+                "max_consecutive_failures": max(x["max_consecutive_failures"] for x in results),
+                "avg_max_consecutive_failures": sum(x["max_consecutive_failures"] for x in results) / n,
+                "total_steps": sum(x["total_steps"] for x in results),
+                "total_failures": sum(x["total_failures"] for x in results),
+                "total_predictions": sum(x["total_predictions"] for x in results),
+                "total_skipped": sum(x.get("total_skipped", 0) for x in results),
+                "total_stopped_early": sum(1 for x in results if x.get("stopped_early", False)),
+            }
+        return {
+            "results": results,
+            "summary": summary,
+            "grid_string_ids": test_gids,
+            "train_grid_string_ids": train_gids,
+            "predictions_generated": predictions_generated,
+        }
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# 첫 앵커 확장 윈도우 V3 검증 함수 (V2 복제)
+# ============================================================================
+
+def validate_first_anchor_extended_window_v3_cp(
+    grid_string_id,
+    cutoff_grid_string_id,
+    window_sizes=(9, 10, 11, 12, 13, 14),
+    method="빈도 기반",
+    threshold=0,
+    stop_on_match=False,
+):
+    """
+    첫 앵커 확장 윈도우 V3 검증 함수 (앵커 기반 순차 검증 시스템)
+    
+    **핵심 검증 로직:**
+    [REQ-101] current_pos 이후의 가장 빠른 앵커를 검증 대상으로 선정
+    [REQ-102] 윈도우 크기는 순차적으로 9, 10, 11, 12, 13, 14 검증
+    
+    [RULE-1] 적중 시 즉시 종료 (Success Exit)
+    - 윈도우에서 예측값이 실제 결과와 일치하면 즉시 해당 앵커 검증 종료
+    - matched_pos + 1을 current_pos로 설정하고 다음 앵커 탐색
+    
+    [RULE-2] 불일치 시 확장 검증 (Failure Sequence)
+    - 예측값이 불일치할 경우에만 다음 윈도우로 확장
+    - 3회 연속 불일치 발생 시 해당 앵커 검증 실패로 간주하고 종료
+    - 3번째 불일치 포지션의 다음 인덱스(mismatched_pos + 1)를 current_pos로 설정
+    
+    Args:
+        grid_string_id: 검증할 grid_string ID
+        cutoff_grid_string_id: cutoff ID (사용하지 않지만 호환성을 위해 유지)
+        window_sizes: 윈도우 크기 목록 (기본값: 9, 10, 11, 12, 13, 14)
+        method: 예측 방법
+        threshold: 임계값
+        stop_on_match: True이면 일치하는 결과가 나오면 검증 종료
+        
+    Returns:
+        dict: 검증 결과
+    """
+    conn = get_change_point_db_connection()
+    try:
+        df = pd.read_sql_query(
+            "SELECT grid_string FROM preprocessed_grid_strings WHERE id = ?",
+            conn,
+            params=[grid_string_id],
+        )
+        if len(df) == 0:
+            return None
+        grid_string = df.iloc[0]["grid_string"]
+        max_ws = max(window_sizes)
+        if len(grid_string) < max_ws:
+            return {
+                "grid_string_id": grid_string_id,
+                "max_consecutive_failures": 0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+                "accuracy": 0.0,
+                "history": [],
+                "stopped_early": False,
+            }
+        
+        # Change-point Detection: 앵커 위치 수집
+        anchors = []
+        for i in range(len(grid_string) - 1):
+            if grid_string[i] != grid_string[i+1]:
+                anchors.append(i)
+        anchors = sorted(list(set(anchors)))
+        
+        if not anchors:
+            return {
+                "grid_string_id": grid_string_id,
+                "max_consecutive_failures": 0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+                "accuracy": 0.0,
+                "history": [],
+                "stopped_early": False,
+            }
+        
+        history = []
+        consecutive_failures = 0
+        max_consecutive_failures = 0
+        total_steps = 0
+        total_failures = 0
+        total_predictions = 0
+        total_skipped = 0
+        stopped_early = False
+        
+        # 현재 검증 포지션 (초기값: 최소 윈도우 크기 - 1, 첫 예측 가능한 위치)
+        current_pos = max_ws - 1
+        MAX_CONSECUTIVE_FAILURES = 3
+        
+        # 앵커 기반 순차 검증 루프
+        while current_pos < len(grid_string):
+            # [REQ-101] current_pos 이후의 가장 빠른 앵커 찾기
+            next_anchor = None
+            for anchor in anchors:
+                if anchor >= current_pos:
+                    next_anchor = anchor
+                    break
+            
+            # 더 이상 검증할 앵커가 없으면 종료
+            if next_anchor is None:
+                break
+            
+            # 해당 앵커에서 윈도우 크기별 순차 검증
+            anchor_consecutive_failures = 0
+            anchor_success = False
+            last_mismatched_pos = None
+            
+            # [REQ-102] 윈도우 크기 9, 10, 11, 12, 13, 14 순차 검증
+            for window_size in window_sizes:
+                # 앵커 위치에서 window_size만큼 추출 가능한지 확인
+                if next_anchor + window_size > len(grid_string):
+                    break
+                
+                # 예측할 위치 (suffix 위치)
+                pos = next_anchor + window_size - 1
+                
+                # current_pos보다 이전 포지션이면 건너뛰기
+                if pos < current_pos:
+                    continue
+                
+                total_steps += 1
+                actual = grid_string[pos]
+                
+                # prefix 계산
+                prefix_len = window_size - 1
+                prefix = grid_string[pos - prefix_len : pos]
+                
+                # DB에서 예측값 조회
+                q = """
+                    SELECT predicted_value, confidence, b_ratio, p_ratio
+                    FROM stored_predictions_change_point
+                    WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
+                    LIMIT 1
+                """
+                df_pred = pd.read_sql_query(q, conn, params=[window_size, prefix, method, threshold])
+                
+                if len(df_pred) == 0:
+                    # 예측값이 없으면 스킵 (연속 실패 카운트에 포함하지 않음)
+                    total_skipped += 1
+                    history.append({
+                        "step": total_steps,
+                        "position": pos,
+                        "anchor": next_anchor,
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": None,
+                        "actual": actual,
+                        "is_correct": None,
+                        "confidence": 0.0,
+                        "selected_window_size": window_size,
+                        "all_predictions": [],
+                        "skipped": True,
+                        "skip_reason": "예측 테이블에 값 없음",
+                    })
+                    continue
+                
+                row = df_pred.iloc[0]
+                predicted = row["predicted_value"]
+                confidence = row["confidence"]
+                
+                # 예측 결과 비교
+                ok = predicted == actual
+                total_predictions += 1
+                
+                if not ok:
+                    consecutive_failures += 1
+                    anchor_consecutive_failures += 1
+                    total_failures += 1
+                    last_mismatched_pos = pos
+                    
+                    if consecutive_failures > max_consecutive_failures:
+                        max_consecutive_failures = consecutive_failures
+                else:
+                    consecutive_failures = 0
+                    # [RULE-1] 적중 시 즉시 종료
+                    anchor_success = True
+                    anchor_consecutive_failures = 0
+                
+                history.append({
+                    "step": total_steps,
+                    "position": pos,
+                    "anchor": next_anchor,
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": predicted,
+                    "actual": actual,
+                    "is_correct": ok,
+                    "confidence": confidence,
+                    "selected_window_size": window_size,
+                    "all_predictions": [{
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": predicted,
+                        "confidence": confidence,
+                        "b_ratio": row["b_ratio"],
+                        "p_ratio": row["p_ratio"],
+                    }],
+                    "skipped": False,
+                })
+                
+                # [RULE-1] 적중 시 즉시 종료하고 다음 앵커 탐색
+                if ok:
+                    # matched_pos + 1을 current_pos로 설정
+                    current_pos = pos + 1
+                    break  # 현재 앵커 검증 종료, 다음 앵커로
+                
+                # [RULE-2] 3회 연속 불일치 발생 시 해당 앵커 검증 실패로 종료
+                if anchor_consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    # 3번째 불일치 포지션의 다음 인덱스를 current_pos로 설정
+                    if last_mismatched_pos is not None:
+                        current_pos = last_mismatched_pos + 1
+                    else:
+                        current_pos = pos + 1
+                    break  # 현재 앵커 검증 종료, 다음 앵커로
+            
+            # stop_on_match 옵션 처리
+            if stop_on_match and anchor_success:
+                stopped_early = True
+                break
+        
+        acc = ((total_predictions - total_failures) / total_predictions * 100) if total_predictions > 0 else 0.0
+        return {
+            "grid_string_id": grid_string_id,
+            "max_consecutive_failures": max_consecutive_failures,
+            "total_steps": total_steps,
+            "total_failures": total_failures,
+            "total_predictions": total_predictions,
+            "total_skipped": total_skipped,
+            "accuracy": acc,
+            "history": history,
+            "stopped_early": stopped_early,
+        }
+    finally:
+        conn.close()
+
+
+def batch_validate_first_anchor_extended_window_v3_cp(
+    cutoff_grid_string_id,
+    window_sizes=(9, 10, 11, 12, 13, 14),
+    method="빈도 기반",
+    threshold=0,
+    stop_on_match=False,
+    auto_generate_predictions=True,
+):
+    """
+    첫 앵커 확장 윈도우 V3 배치 검증 (cutoff 이후 grid_string) - V2 복제
+    
+    **예측값 사용 방식:**
+    1. cutoff 이전 데이터(학습 데이터)로만 예측값 테이블 생성
+    2. 생성된 예측값으로 cutoff 이후 데이터(검증 데이터) 검증
+    
+    Args:
+        cutoff_grid_string_id: cutoff ID (이 ID 이전 = 학습 데이터, 이후 = 검증 데이터)
+        window_sizes: 윈도우 크기 목록 (기본값: 9, 10, 11, 12, 13, 14)
+        method: 예측 방법
+        threshold: 임계값 (예측값 생성 시 사용)
+        stop_on_match: True이면 각 grid_string 검증 중 일치하는 결과가 나오면 종료
+        auto_generate_predictions: True이면 cutoff 이전 데이터로 예측값 자동 생성
+        
+    Returns:
+        dict: {
+            "results": 검증 결과 목록,
+            "summary": 요약 통계,
+            "grid_string_ids": 검증된 grid_string ID 목록,
+            "train_grid_string_ids": 학습용 grid_string ID 목록 (cutoff 이전),
+            "predictions_generated": 예측값 생성 여부
+        }
+    """
+    from change_point_prediction_module import save_or_update_predictions_for_change_point_data
+    
+    # cutoff 이전 데이터로 예측값 테이블 생성 (학습 데이터 기반)
+    predictions_generated = False
+    if auto_generate_predictions:
+        try:
+            pred_result = save_or_update_predictions_for_change_point_data(
+                cutoff_grid_string_id=cutoff_grid_string_id,
+                window_sizes=window_sizes,
+                methods=(method,),
+                thresholds=(threshold,),
+                min_sample_count=15,
+            )
+            predictions_generated = True
+        except Exception as e:
+            # 예측값 생성 실패 시 경고만 출력하고 계속 진행
+            import warnings
+            warnings.warn(f"예측값 생성 실패: {e}. 기존 예측값을 사용합니다.")
+    
+    conn = get_change_point_db_connection()
+    try:
+        # cutoff 이후의 모든 grid_string ID 조회 (검증 데이터)
+        df_test = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id > ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        
+        # cutoff 이전의 모든 grid_string ID 조회 (학습 데이터)
+        df_train = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        
+        if len(df_test) == 0:
+            return {
+                "results": [],
+                "summary": {
+                    "total_grid_strings": 0,
+                    "avg_accuracy": 0.0,
+                    "max_consecutive_failures": 0,
+                    "avg_max_consecutive_failures": 0.0,
+                    "total_steps": 0,
+                    "total_failures": 0,
+                    "total_predictions": 0,
+                    "total_skipped": 0,
+                },
+                "grid_string_ids": [],
+                "train_grid_string_ids": df_train["id"].tolist() if len(df_train) > 0 else [],
+                "predictions_generated": predictions_generated,
+            }
+        
+        # cutoff 이후의 모든 데이터를 검증
+        test_gids = df_test["id"].tolist()
+        train_gids = df_train["id"].tolist() if len(df_train) > 0 else []
+        
+        results = []
+        for gid in test_gids:
+            r = validate_first_anchor_extended_window_v3_cp(
+                gid, cutoff_grid_string_id,
+                window_sizes=window_sizes,
+                method=method,
+                threshold=threshold,
+                stop_on_match=stop_on_match,
+            )
+            if r is not None:
+                results.append(r)
+        
+        if not results:
+            summary = {
+                "total_grid_strings": 0,
+                "avg_accuracy": 0.0,
+                "max_consecutive_failures": 0,
+                "avg_max_consecutive_failures": 0.0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+            }
+        else:
+            n = len(results)
+            summary = {
+                "total_grid_strings": n,
+                "avg_accuracy": sum(x["accuracy"] for x in results) / n,
+                "max_consecutive_failures": max(x["max_consecutive_failures"] for x in results),
+                "avg_max_consecutive_failures": sum(x["max_consecutive_failures"] for x in results) / n,
+                "total_steps": sum(x["total_steps"] for x in results),
+                "total_failures": sum(x["total_failures"] for x in results),
+                "total_predictions": sum(x["total_predictions"] for x in results),
+                "total_skipped": sum(x.get("total_skipped", 0) for x in results),
+                "total_stopped_early": sum(1 for x in results if x.get("stopped_early", False)),
+            }
+        return {
+            "results": results,
+            "summary": summary,
+            "grid_string_ids": test_gids,
+            "train_grid_string_ids": train_gids,
+            "predictions_generated": predictions_generated,
+        }
+    finally:
+        conn.close()

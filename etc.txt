@@ -120,17 +120,6 @@ streamlit run live_game_app_parallel.py
 윈도우 크기=8, 최대 간격=4, 임계값=52.2%
 윈도우 크기=8, 최대 간격=6, 임계값=52.0%
 
-N-gram 구조: $Input[i]$ (이전 줄의 마지막) + $Input[i+1...]$ (새로운 줄의 시작들)
-윈도우 크기는 7 8 9 10 
-
-
-윈도우 크기=7, 최대 간격=4, 임계값=52.1%
-윈도우 크기=8, 최대 간격=5, 임계값=52.3%
-윈도우 크기=8, 최대 간격=6, 임계값=52.0%
-
-윈도우 크기=8, 최대 간격=5, 임계값=52.8%
-윈도우 크기=8, 최대 간격=6, 임계값=52.0%
-윈도우 크기=8, 최대 간격=6, 임계값=52.2%
 
 윈도우 크기=8, 최대 간격=5, 임계값=52.2%  260125 1030 L6
 
@@ -142,6 +131,8 @@ streamlit run live_game_change_point_app.py
 streamlit run change_point_simulation_app.py
 streamlit run change_point_live_game_app.py
 
+
+streamlit run change_point_hypothesis_test_app.py
 
 git checkout change_point
 git pull origin change_point
@@ -156,7 +147,13 @@ git push origin change_point
 12 56 70 
 
 
-윈도우 크기=8, 임계값=59.0%
+git checkout -b change_point-v2 (수정된 내용이 v2로 따라옵니다)
+
+git add .
+
+git commit -m "v2 시작"
+
+git push -u origin change_point-v2
 
 
 
@@ -198,3 +195,7 @@ bppbbbppppbbp
 1 2 3 4 5 
 
 bpbpbbpbppbbpbppbpbbpbbbbpbbppbbbbppppbbpbpbb
+
+ID 1930 
+
+ 

@@ -28,6 +28,7 @@ from change_point_hypothesis_module import (
     batch_validate_threshold_skip_anchor_priority_cp,
     batch_validate_first_anchor_extended_window_v2_cp,
     batch_validate_first_anchor_extended_window_v3_cp,
+    batch_validate_first_anchor_extended_window_v3_live_next_anchor_cp,
     generate_simulation_predictions_table,
     HYPOTHESIS_REGISTRY,
 )
@@ -170,6 +171,8 @@ def main():
         is_first_anchor_extended_v2 = (selected_hypothesis_name == "first_anchor_extended_window_v2")
         # first_anchor_extended_window_v3 가설인 경우 특별 처리
         is_first_anchor_extended_v3 = (selected_hypothesis_name == "first_anchor_extended_window_v3")
+        # first_anchor_extended_window_v3_live_next_anchor 가설인 경우 특별 처리 (V3와 동일 시뮬레이션 실행 방식 복제)
+        is_first_anchor_extended_v3_live_next_anchor = (selected_hypothesis_name == "first_anchor_extended_window_v3_live_next_anchor")
         
         if is_threshold_skip_anchor_priority:
             st.markdown("#### 윈도우 크기 선택 및 임계값 설정")
@@ -314,6 +317,60 @@ def main():
                         except Exception as e:
                             st.error(f"❌ 예측값 테이블 생성 실패: {str(e)}")
                             st.session_state["v3_predictions_generated"] = False
+        elif is_first_anchor_extended_v3_live_next_anchor:
+            # V3와 동일한 시뮬레이션 실행 방식 복제 (참조 없이 구현)
+            st.markdown("#### 윈도우 크기 (9-14)")
+            st.info("📌 첫 앵커 확장 윈도우 V3 (라이브 다음 앵커): 윈도우 9~14, 시뮬레이션 테이블·실행 흐름은 V3와 동일.")
+            
+            col_w1, col_w2, col_w3, col_w4, col_w5, col_w6 = st.columns(6)
+            with col_w1:
+                w9 = st.checkbox("9", True, key="w9_extended_v3_live")
+            with col_w2:
+                w10 = st.checkbox("10", True, key="w10_extended_v3_live")
+            with col_w3:
+                w11 = st.checkbox("11", True, key="w11_extended_v3_live")
+            with col_w4:
+                w12 = st.checkbox("12", True, key="w12_extended_v3_live")
+            with col_w5:
+                w13 = st.checkbox("13", True, key="w13_extended_v3_live")
+            with col_w6:
+                w14 = st.checkbox("14", True, key="w14_extended_v3_live")
+            
+            ws = []
+            if w9: ws.append(9)
+            if w10: ws.append(10)
+            if w11: ws.append(11)
+            if w12: ws.append(12)
+            if w13: ws.append(13)
+            if w14: ws.append(14)
+            
+            st.markdown("#### 임계값")
+            thresh_sim = st.number_input("임계값", 0, 100, 0, key="thresh_extended_v3_live")
+            hypothesis_config = {}
+            
+            st.markdown("---")
+            st.markdown("#### 🔧 V3 라이브 다음 앵커 시뮬레이션 예측값 테이블 생성")
+            st.info("💡 V3와 동일: 검증 전에 예측값 테이블을 먼저 생성해야 합니다.")
+            
+            if st.button("예측값 테이블 생성", key="generate_v3_live_predictions", type="secondary"):
+                if not ws:
+                    st.warning("최소 하나의 윈도우를 선택하세요.")
+                elif cutoff_sim is None:
+                    st.warning("Cutoff ID를 선택하세요.")
+                else:
+                    with st.spinner("예측값 테이블 생성 중... (시간이 소요될 수 있습니다)"):
+                        try:
+                            result = generate_simulation_predictions_table(
+                                cutoff_grid_string_id=cutoff_sim,
+                                window_sizes=tuple(ws),
+                                method=method_sim,
+                                threshold=thresh_sim,
+                            )
+                            st.success(f"✅ 예측값 테이블 생성 완료! (저장된 레코드: {result.get('total_saved', 0):,}개)")
+                            st.session_state["v3_predictions_generated"] = True
+                        except Exception as e:
+                            st.error(f"❌ 예측값 테이블 생성 실패: {str(e)}")
+                            st.session_state["v3_predictions_generated"] = False
         else:
             st.markdown("#### 윈도우 크기")
             col_w1, col_w2, col_w3, col_w4, col_w5 = st.columns(5)
@@ -355,6 +412,24 @@ def main():
         if st.button("시뮬레이션 실행", type="primary", use_container_width=True):
             if is_first_anchor_extended_v3:
                 # V3 독립 검증 함수 사용
+                if not ws:
+                    st.warning("최소 하나의 윈도우를 선택하세요.")
+                elif cutoff_sim is None:
+                    st.warning("Cutoff ID를 선택하세요.")
+                elif not st.session_state.get("v3_predictions_generated", False):
+                    st.warning("⚠️ 먼저 '예측값 테이블 생성' 버튼을 클릭하여 예측값 테이블을 생성하세요.")
+                else:
+                    st.session_state["test_mode"] = "single"
+                    st.session_state["test_hypothesis"] = selected_hypothesis_name
+                    st.session_state["test_config"] = hypothesis_config
+                    st.session_state["test_cutoff"] = cutoff_sim if cutoff_sim is not None else 0
+                    st.session_state["test_ws"] = ws
+                    st.session_state["test_method"] = method_sim
+                    st.session_state["test_thresh"] = thresh_sim
+                    st.session_state["test_results"] = None
+                    st.rerun()
+            elif is_first_anchor_extended_v3_live_next_anchor:
+                # V3와 동일한 시뮬레이션 실행 방식 복제: 예측값 테이블 생성 후 배치 검증
                 if not ws:
                     st.warning("최소 하나의 윈도우를 선택하세요.")
                 elif cutoff_sim is None:
@@ -923,6 +998,14 @@ def main():
                             method=method_sim,
                             threshold=thresh_sim,
                         )
+                    # first_anchor_extended_window_v3_live_next_anchor: V3와 동일 시뮬 실행 방식 복제(배치만 다름)
+                    elif hyp_name == "first_anchor_extended_window_v3_live_next_anchor":
+                        res = batch_validate_first_anchor_extended_window_v3_live_next_anchor_cp(
+                            cutoff_sim,
+                            window_sizes=tuple(ws),
+                            method=method_sim,
+                            threshold=thresh_sim,
+                        )
                     # first_anchor_extended_window_v2 가설인 경우 독립 검증 함수 사용
                     elif hyp_name == "first_anchor_extended_window_v2":
                         res = batch_validate_first_anchor_extended_window_v2_cp(
@@ -974,6 +1057,14 @@ def main():
                         # first_anchor_extended_window_v3 가설인 경우 독립 검증 함수 사용
                         if hyp_name == "first_anchor_extended_window_v3":
                             res = batch_validate_first_anchor_extended_window_v3_cp(
+                                cutoff_sim,
+                                window_sizes=tuple(ws),
+                                method=method_sim,
+                                threshold=thresh_sim,
+                            )
+                        # first_anchor_extended_window_v3_live_next_anchor: V3와 동일 시뮬 실행 방식 복제
+                        elif hyp_name == "first_anchor_extended_window_v3_live_next_anchor":
+                            res = batch_validate_first_anchor_extended_window_v3_live_next_anchor_cp(
                                 cutoff_sim,
                                 window_sizes=tuple(ws),
                                 method=method_sim,

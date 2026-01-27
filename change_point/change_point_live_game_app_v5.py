@@ -134,6 +134,8 @@ def validate_grid_string_v3_cp(
 
                 if len(df_pred) == 0:
                     total_skipped += 1
+                    # 스킵이어도 이 포지션은 지남 → 이미 지난 포지션으로 역방향 예측하는 일 방지
+                    current_pos = max(current_pos, pos + 1)
                     history.append({
                         "step": total_steps,
                         "position": pos,
@@ -308,7 +310,7 @@ def render_grid_string_and_anchors(grid_string: str):
 
 
 def build_validation_history_table(history):
-    """검증 history를 hypothesis_test_app 스타일의 테이블 행 리스트로 변환."""
+    """검증 history를 hypothesis_test_app 스타일의 테이블 행 리스트로 변환. 스텝 역순(최신순 상단)."""
     rows = []
     for e in history or []:
         ok = e.get("is_correct")
@@ -330,6 +332,8 @@ def build_validation_history_table(history):
             "신뢰도": f"{e.get('confidence', 0):.1f}%" if pred else "-",
             "스킵 사유": reason if skip else "",
         })
+    # 스텝 역순: 최신순이 상단
+    rows.sort(key=lambda r: r["Step"], reverse=True)
     return rows
 
 

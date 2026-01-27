@@ -26,12 +26,12 @@ st.set_page_config(
     layout="wide",
 )
 
-WINDOW_SIZES = (9, 10, 11, 12, 13, 14)
+WINDOW_SIZES = (9, 10, 11, 12)  # 윈도우 13,14 제거
 
 
 def validate_grid_string_v3_cp(
     grid_string: str,
-    window_sizes=(9, 10, 11, 12, 13, 14),
+    window_sizes=(9, 10, 11, 12),
     method="빈도 기반",
     threshold=0,
 ):
@@ -41,7 +41,7 @@ def validate_grid_string_v3_cp(
     - grid_string을 인자로 직접 받고, DB에서 읽지 않음.
     - simulation_predictions_change_point 테이블에서 예측값 조회.
     - REQ-101: current_pos 이후 가장 빠른 앵커부터 검증
-    - REQ-102: 윈도우 9,10,11,12,13,14 순차 검증
+    - REQ-102: 윈도우 9,10,11,12 순차 검증 (13,14 제거)
     - RULE-1: 적중 시 즉시 다음 앵커로
     - RULE-2: 3회 연속 불일치 시 해당 앵커 종료 후 다음 앵커로
     """
@@ -136,6 +136,8 @@ def validate_grid_string_v3_cp(
 
                 if len(df_pred) == 0:
                     total_skipped += 1
+                    # 스킵이어도 이 포지션은 지남 → 이미 지난 포지션으로 역방향 예측하는 일 방지
+                    current_pos = max(current_pos, pos + 1)
                     history.append({
                         "step": total_steps,
                         "position": pos,
@@ -224,7 +226,7 @@ def validate_grid_string_v3_cp(
 
 def predict_next_v3_cp(
     grid_string: str,
-    window_sizes=(9, 10, 11, 12, 13, 14),
+    window_sizes=(9, 10, 11, 12),
     method="빈도 기반",
     threshold=0,
     current_pos=0,
@@ -310,7 +312,7 @@ def render_grid_string_and_anchors(grid_string: str):
 
 
 def build_validation_history_table(history):
-    """검증 history를 hypothesis_test_app 스타일의 테이블 행 리스트로 변환."""
+    """검증 history를 hypothesis_test_app 스타일의 테이블 행 리스트로 변환. 스텝 역순(최신순 상단)."""
     rows = []
     for e in history or []:
         ok = e.get("is_correct")
@@ -332,6 +334,8 @@ def build_validation_history_table(history):
             "신뢰도": f"{e.get('confidence', 0):.1f}%" if pred else "-",
             "스킵 사유": reason if skip else "",
         })
+    # 스텝 역순: 최신순이 상단
+    rows.sort(key=lambda r: r["Step"], reverse=True)
     return rows
 
 

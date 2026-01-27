@@ -583,6 +583,95 @@ class FirstAnchorExtendedWindowHypothesisV3(Hypothesis):
         return {}
 
 
+class FirstAnchorExtendedWindowHypothesisV3LiveNextAnchor(Hypothesis):
+    """
+    첫 앵커 확장 윈도우 가설 V3 (라이브 다음 앵커) - 라이브 게임 검증 방식.
+    
+    V3와 동일한 REQ-102, RULE-1, RULE-2 적용.
+    다음 앵커 선택만 [REQ-101-LIVE]: current_pos를 예측 가능한 가장 낮은 앵커 선택.
+    (V3는 anchor_position >= current_pos, 본 가설은 anchor + max_ws - 1 >= current_pos)
+    상세: change_point/라이브게임_V3_다음앵커_로직_차이.md 참고.
+    """
+    
+    def __init__(self):
+        pass
+    
+    def predict(self, grid_string, position, window_sizes, method, threshold, **kwargs):
+        """
+        V3(9-14)와 동일: stored_predictions_change_point 조회, 확장 윈도우 9~14 중 최고 신뢰도 선택.
+        (다음 앵커 선택만 검증 루프에서 [REQ-101-LIVE] 적용, predict 자체는 V3와 동일)
+        """
+        extended_windows = [w for w in window_sizes if 9 <= w <= 14]
+        if not extended_windows:
+            return {
+                "predicted": None,
+                "confidence": 0.0,
+                "window_size": None,
+                "prefix": None,
+                "all_predictions": [],
+                "skipped": False,
+            }
+        conn = get_change_point_db_connection()
+        try:
+            all_predictions = []
+            for window_size in extended_windows:
+                prefix_len = window_size - 1
+                if position < prefix_len:
+                    continue
+                prefix = grid_string[position - prefix_len : position]
+                q = """
+                    SELECT predicted_value, confidence, b_ratio, p_ratio
+                    FROM stored_predictions_change_point
+                    WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
+                    LIMIT 1
+                """
+                df = pd.read_sql_query(q, conn, params=[window_size, prefix, method, threshold])
+                if len(df) == 0:
+                    continue
+                row = df.iloc[0]
+                all_predictions.append({
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": row["predicted_value"],
+                    "confidence": row["confidence"],
+                    "b_ratio": row["b_ratio"],
+                    "p_ratio": row["p_ratio"],
+                })
+            if not all_predictions:
+                return {
+                    "predicted": None,
+                    "confidence": 0.0,
+                    "window_size": None,
+                    "prefix": None,
+                    "all_predictions": [],
+                    "skipped": False,
+                }
+            best = max(all_predictions, key=lambda x: x["confidence"])
+            return {
+                "predicted": best["predicted"],
+                "confidence": best["confidence"],
+                "window_size": best["window_size"],
+                "prefix": best["prefix"],
+                "all_predictions": all_predictions,
+                "skipped": False,
+            }
+        finally:
+            conn.close()
+    
+    def get_name(self):
+        return "첫 앵커 확장 윈도우 V3 (라이브 다음 앵커)"
+    
+    def get_description(self):
+        return (
+            "라이브 게임 검증 방식: current_pos를 예측 가능한 가장 낮은 앵커 선택. "
+            "REQ-102·RULE-1·RULE-2는 V3와 동일. "
+            "검증 시 validate_first_anchor_extended_window_v3_live_next_anchor_cp 사용."
+        )
+    
+    def get_config_schema(self):
+        return {}
+
+
 class ThresholdSkipAnchorPriorityHypothesis(Hypothesis):
     """임계점 스킵 + 앵커 우선순위 가설 - 임계점 미만 스킵, 앵커 중첩 시 이전 앵커 우선"""
     
@@ -913,6 +1002,7 @@ register_hypothesis("large_window_only", LargeWindowOnlyHypothesis)
 register_hypothesis("first_anchor_extended_window", FirstAnchorExtendedWindowHypothesis)
 register_hypothesis("first_anchor_extended_window_v2", FirstAnchorExtendedWindowHypothesisV2)
 register_hypothesis("first_anchor_extended_window_v3", FirstAnchorExtendedWindowHypothesisV3)
+register_hypothesis("first_anchor_extended_window_v3_live_next_anchor", FirstAnchorExtendedWindowHypothesisV3LiveNextAnchor)
 register_hypothesis("threshold_skip_anchor_priority", ThresholdSkipAnchorPriorityHypothesis)
 register_hypothesis("threshold_skip_anchor_priority_extended", ThresholdSkipAnchorPriorityExtendedHypothesis)
 

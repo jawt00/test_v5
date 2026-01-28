@@ -1,9 +1,13 @@
 winget install Microsoft.WindowsTerminal
 https://github.com/microsoft/terminal/releases
 
+sha256:83efe4572599479e9df38317a7be7feb1e2e86430432fc8d84f76df19de6cd11
+
 
 https://github.com/arche00/test_v5
 cd /c/
+
+cd /c/test_v5
 
 git clone https://github.com/arche00/test_v5.git
 
@@ -17,6 +21,7 @@ c:\test_v5\venv\Scripts\activate
 
 
 pip install -r requirements.txt
+
 
 
 streamlit run hypothesis_validation_app.py
@@ -134,6 +139,11 @@ streamlit run change_point_live_game_app.py
 
 streamlit run change_point_hypothesis_test_app.py
 
+streamlit run change_point_live_game_app_v5.py
+
+
+cd c:\test_v5\change_point 
+
 git checkout change_point
 git pull origin change_point
 
@@ -148,6 +158,8 @@ git push origin change_point
 
 
 git checkout -b change_point-v2 (수정된 내용이 v2로 따라옵니다)
+
+git pull origin change_point-v2
 
 git add .
 
@@ -186,16 +198,9 @@ git push -u origin change_point-v2
 12 64 
 윈도우 크기=10, 임계값=59.0%
 
+ppppbppbpppppp
 
-bbbpbppbbbbpbpbbbpbppbbbpbbbpp
+ppppbppbppppppbpppb
 
-bbbpbppbbbbp
-
-bppbbbppppbbp
-1 2 3 4 5 
-
-bpbpbbpbppbbpbppbpbbpbbbbpbbppbbbbppppbbpbpbb
-
-ID 1930 
-
+ppppbppbppppppbpppbppp
  

@@ -38,10 +38,14 @@ def validate_grid_string_v3_cp(
     (change_point_hypothesis_module.validate_first_anchor_extended_window_v3_cp 로직 복제)
     - grid_string을 인자로 직접 받고, DB에서 읽지 않음.
     - simulation_predictions_change_point 테이블에서 예측값 조회.
-    - REQ-101: current_pos 이후 가장 빠른 앵커부터 검증
+    - REQ-101: current_pos 이후 가장 빠른 앵커(위치 >= current_pos)부터 검증
     - REQ-102: 윈도우 9,10,11,12,13,14 순차 검증
     - RULE-1: 적중 시 즉시 다음 앵커로
     - RULE-2: 3회 연속 불일치 시 해당 앵커 종료 후 다음 앵커로
+    재계산 방식: b/p 입력 시 grid_string에 새 글자 추가 → 앵커 재추출 → 전수 검증.
+    루프 종료 시 "마지막으로 처리 중이던 앵커 상태"를 반환:
+    - anchor_completed=True: 성공/3패로 해당 앵커 종료 → 다음 앵커, 윈도우 9 예측
+    - anchor_completed=False: 진행 중(문자열 끝 등) → 동일 앵커, 다음 윈도우 예측
     """
     conn = get_change_point_db_connection()
     try:
@@ -59,6 +63,8 @@ def validate_grid_string_v3_cp(
                 "final_current_pos": 0,
                 "final_anchor_idx": 0,
                 "final_anchor_consecutive_failures": 0,
+                "anchor_completed": True,
+                "last_window_used": None,
                 "anchors": [],
             }
 
@@ -80,9 +86,12 @@ def validate_grid_string_v3_cp(
                 "final_current_pos": 0,
                 "final_anchor_idx": 0,
                 "final_anchor_consecutive_failures": 0,
+                "anchor_completed": True,
+                "last_window_used": None,
                 "anchors": anchors,
             }
 
+        # 증분 검증: 이전 결과가 있고, 새 문자열이 “이전 문자열 + 한 글자”인 경우에만 이어서 검증
         history = []
         consecutive_failures = 0
         max_consecutive_failures = 0
@@ -90,14 +99,16 @@ def validate_grid_string_v3_cp(
         total_failures = 0
         total_predictions = 0
         total_skipped = 0
-        MAX_CONSECUTIVE_FAILURES = 3
         current_pos = 0
         anchor_idx = 0
-
+        anchor_completed = True
+        last_window_used = None
+        exited_via_pos_beyond = False
+        MAX_CONSECUTIVE_FAILURES = 3
         max_ws = max(window_sizes)
+
         while current_pos < len(grid_string) and anchor_idx < len(anchors):
-            # 해당 앵커가 커버할 수 있는 최대 position(anchor+max_ws-1)을 이미 지났을 때만 skip
-            while anchor_idx < len(anchors) and anchors[anchor_idx] + max_ws - 1 < current_pos:
+            while anchor_idx < len(anchors) and anchors[anchor_idx] < current_pos:
                 anchor_idx += 1
             if anchor_idx >= len(anchors):
                 break
@@ -152,6 +163,7 @@ def validate_grid_string_v3_cp(
                     continue
 
                 anchor_processed_any = True
+                last_window_used = window_size
                 row = df_pred.iloc[0]
                 predicted = row["predicted_value"]
                 confidence = row["confidence"]
@@ -186,14 +198,18 @@ def validate_grid_string_v3_cp(
                 if ok:
                     current_pos = pos + 1
                     anchor_idx += 1
+                    anchor_completed = True
                     break
                 if anchor_consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                     current_pos = (last_mismatched_pos + 1) if last_mismatched_pos is not None else (pos + 1)
                     anchor_idx += 1
+                    anchor_completed = True
                     break
 
-            # 문자열 길이 때문에 for가 끊긴 경우: 앵커를 바꾸지 않고 while 종료 (다음 예측은 같은 앵커·다음 윈도우)
             if exit_for_pos_beyond:
+                current_pos = len(grid_string)
+                anchor_completed = False
+                exited_via_pos_beyond = True
                 break
             if not anchor_success and anchor_consecutive_failures < MAX_CONSECUTIVE_FAILURES:
                 if anchor_processed_any and last_mismatched_pos is not None:
@@ -202,6 +218,11 @@ def validate_grid_string_v3_cp(
                     current_pos = min(next_anchor + max(window_sizes) - 1, len(grid_string) - 1) + 1
                 else:
                     current_pos = min(next_anchor + max(window_sizes) - 1, len(grid_string) - 1) + 1
+                anchor_idx += 1
+                anchor_completed = True
+
+        if not exited_via_pos_beyond:
+            while anchor_idx < len(anchors) and anchors[anchor_idx] < current_pos:
                 anchor_idx += 1
 
         acc = ((total_predictions - total_failures) / total_predictions * 100) if total_predictions > 0 else 0.0
@@ -216,6 +237,8 @@ def validate_grid_string_v3_cp(
             "final_current_pos": current_pos,
             "final_anchor_idx": anchor_idx,
             "final_anchor_consecutive_failures": anchor_consecutive_failures,
+            "anchor_completed": anchor_completed,
+            "last_window_used": last_window_used,
             "anchors": anchors,
         }
     finally:
@@ -227,31 +250,35 @@ def predict_next_v3_cp(
     window_sizes=(9, 10, 11, 12, 13, 14),
     method="빈도 기반",
     threshold=0,
-    current_pos=0,
     anchor_idx=0,
-    anchor_consecutive_failures=0,
+    anchor_completed=True,
+    last_window_used=None,
 ):
     """
     현재 grid_string 기준으로 다음 예측값 반환 (position = len(grid_string)).
-    검증이 넘긴 (current_pos, anchor_idx)를 그대로 사용: anchor_idx가 "다음에 쓸 앵커"이므로
-    그 앵커에서 윈도우 9~14 순차 시도, required_pos == position 인 첫 사용 가능 예측 반환.
+    - anchor_completed=True(성공/3패 종료): 다음 앵커(anchor_idx), 윈도우 9부터 시도
+    - anchor_completed=False(진행 중): 동일 앵커(anchor_idx), (last_window_used+1)부터 시도
     """
     position = len(grid_string)
     anchors = _anchors_from_grid_string(grid_string)
     if not anchors:
         return {"predicted": None, "confidence": 0.0, "window_size": None, "prefix": None, "anchor": None, "skipped": True}
 
-    # 검증에서 넘긴 final_anchor_idx = "다음에 쓸 앵커"이므로 그대로 사용.
-    # (앵커 위치 < current_pos 여도, position=len(gs)에 대한 예측은 그 앵커·윈도우 조합으로 가능)
     if anchor_idx >= len(anchors):
         return {"predicted": None, "confidence": 0.0, "window_size": None, "prefix": None, "anchor": None, "skipped": True}
 
     next_anchor = anchors[anchor_idx]
+    if anchor_completed:
+        try_windows = list(window_sizes)
+    else:
+        base = (last_window_used + 1) if last_window_used is not None else min(window_sizes)
+        try_windows = [w for w in window_sizes if w >= base]
+
     conn = get_change_point_db_connection()
     try:
-        for window_size in window_sizes:
+        for window_size in try_windows:
             required_pos = next_anchor + window_size - 1
-            if required_pos != position or required_pos < current_pos:
+            if required_pos != position:
                 continue
             prefix_len = window_size - 1
             if position < prefix_len:
@@ -397,13 +424,17 @@ def main():
             window_sizes=WINDOW_SIZES,
             method="빈도 기반",
             threshold=0,
-            current_pos=result.get("final_current_pos", 0),
             anchor_idx=result.get("final_anchor_idx", 0),
-            anchor_consecutive_failures=result.get("final_anchor_consecutive_failures", 0),
+            anchor_completed=result.get("anchor_completed", True),
+            last_window_used=result.get("last_window_used"),
         )
         st.markdown("**다음 예측값**")
         if next_pred.get("skipped") or next_pred.get("predicted") is None:
-            st.info("예측 없음 (스킵 또는 해당 prefix 없음)")
+            anchor = next_pred.get("anchor")
+            if anchor is not None:
+                st.info(f"다음 앵커: **{anchor}** · 예측 없음 (해당 position을 커버하는 윈도우 없음 또는 prefix 없음)")
+            else:
+                st.info("예측 없음 (스킵 또는 해당 prefix 없음)")
         else:
             pv = next_pred.get("predicted", "")
             conf = next_pred.get("confidence", 0.0)

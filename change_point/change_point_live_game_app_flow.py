@@ -380,43 +380,65 @@ def live_step(state: dict, grid_string: str, history: list, user_input: str):
     }
 
 
+CELLS_PER_ROW = 35
+
+
 def render_grid_string_and_anchors(grid_string: str, anchors: list = None):
-    """Grid String 및 앵커 위치 시각화. 각 위치별 간격·포지션 인덱스·앵커 인덱스 통일."""
+    """Grid String 및 앵커 위치 시각화. 1:1:1 격자 비율, 문자행 줄바꿈 없음, 문자·포지션 중간 크기."""
     if not grid_string:
         st.caption("(Grid String 없음)")
         return
     if anchors is None:
         anchors = _anchors_from_grid_string(grid_string)
-    # anchor_position -> anchor_idx
     pos_to_anchor_idx = {p: i for i, p in enumerate(anchors)}
 
-    cell_style = "display:inline-block;min-width:1.5em;text-align:center;font-family:monospace;vertical-align:top;"
-    box_style = "font-size:18px;padding:8px 10px;border:1px solid #ddd;border-radius:6px;background:#fafafa;line-height:1.5;"
+    # 1:1:1 비율: 문자·포지션·앵커 행 동일 격자 크기 (같은 width, 같은 min-height)
+    # 문자·포지션 중간 크기: font-size 12px 기준으로 배치
+    cell_w = "1.85em"
+    cell_h = "1.85em"
+    base_cell = (
+        f"display:inline-block;width:{cell_w};min-width:{cell_w};max-width:{cell_w};"
+        f"min-height:{cell_h};height:{cell_h};line-height:{cell_h};"
+        "text-align:center;font-family:monospace;vertical-align:middle;"
+        "border:1px solid #ccc;box-sizing:border-box;padding:0;"
+        "font-size:12px;"
+    )
+    row_style = "margin-bottom:2px;line-height:0;font-size:0;"
 
-    # 1행: 문자 (앵커 위치는 연한 파란색)
+    def make_rows(cells: list, n: int = CELLS_PER_ROW):
+        rows = []
+        for start in range(0, len(cells), n):
+            rows.append("".join(cells[start : start + n]))
+        return rows
+
+    # 1행: 문자 — 격자 크기로 줄바꿈 방지 (white-space:nowrap, overflow:hidden)
+    char_cell = base_cell + "white-space:nowrap;overflow:hidden;"
     chars = []
     for i, c in enumerate(grid_string):
-        bg = "background:#ADD8E6;" if i in anchors else ""
-        chars.append(f"<span style='{cell_style}{bg}'>{c}</span>")
-    st.markdown(f"<div style='{box_style}'>{''.join(chars)}</div>", unsafe_allow_html=True)
+        bg = "background:#ADD8E6;" if i in anchors else "background:#fff;"
+        chars.append(f"<span style='{char_cell}{bg}'>{c}</span>")
+    for row_html in make_rows(chars):
+        st.markdown(f"<div style='{row_style}'>{row_html}</div>", unsafe_allow_html=True)
 
-    # 2행: 포지션 인덱스(0,1,...,9,10,11,...) — 2자리 고정으로 통일
+    # 2행: 포지션 인덱스 — 같은 격자 크기, 중간 크기 유지
     idx_cells = []
     for i in range(len(grid_string)):
-        idx_cells.append(f"<span style='{cell_style}font-size:11px;color:#555;'>{i:2d}</span>")
-    st.markdown(f"<div style='{box_style}font-size:11px;color:#555;'>{''.join(idx_cells)}</div>", unsafe_allow_html=True)
+        idx_cells.append(f"<span style='{base_cell}color:#555;'>{i}</span>")
+    for row_html in make_rows(idx_cells):
+        st.markdown(f"<div style='{row_style}'>{row_html}</div>", unsafe_allow_html=True)
 
-    # 3행: 앵커 인덱스 (앵커 위치에만 a0, a1, ... 표시)
+    # 3행: 앵커 인덱스 — 같은 격자 크기 (1:1:1)
     anchor_cells = []
     for i in range(len(grid_string)):
         if i in pos_to_anchor_idx:
             a_idx = pos_to_anchor_idx[i]
-            anchor_cells.append(f"<span style='{cell_style}font-size:10px;color:#0066cc;font-weight:bold;'>a{a_idx}</span>")
+            anchor_cells.append(f"<span style='{base_cell}color:#0066cc;font-weight:bold;'>{a_idx}</span>")
         else:
-            anchor_cells.append(f"<span style='{cell_style}font-size:10px;color:#ccc;'>·</span>")
-    st.markdown(f"<div style='{box_style}font-size:10px;color:#0066cc;'>{''.join(anchor_cells)}</div>", unsafe_allow_html=True)
+            anchor_cells.append(f"<span style='{base_cell}color:#ccc;'>·</span>")
+    for row_html in make_rows(anchor_cells):
+        st.markdown(f"<div style='{row_style}'>{row_html}</div>", unsafe_allow_html=True)
 
-    st.caption("위: 문자 | 가운데: 포지션 인덱스(0~) | 아래: 앵커 인덱스(a0,a1,...). 연한 파란색=앵커(변화점)")
+    st.caption("위: 문자 | 가운데: 포지션 인덱스(0~) | 아래: 앵커 인덱스(0,1,...). 연한 파란색=앵커(변화점)")
 
 
 def build_validation_history_table(history):

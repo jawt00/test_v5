@@ -37,7 +37,7 @@ def _anchors_from_grid_string(grid_string: str):
 
 
 def _first_anchor_from_position(anchors: list, from_pos: int) -> int:
-    """종료 포지션(from_pos)부터 다음 앵커 탐색. anchors[i] >= from_pos 인 첫 인덱스 i. 없으면 len(anchors)."""
+    """from_pos 이상인 첫 앵커 인덱스. 종료 시 '다음 포지션'부터 앵커 탐색용. 없으면 len(anchors)."""
     i = 0
     while i < len(anchors) and anchors[i] < from_pos:
         i += 1
@@ -62,13 +62,14 @@ def cold_start(grid_string: str):
     [단계 1] 앵커 추출
     [단계 2] current_pos=0, 다음 앵커 = first anchor >= 0
     [단계 3] 앵커별 검증 루프
-      - 종료조건 충족(적중/3패): 종료 포지션부터 다음 앵커 탐색 → active_anchor_idx 갱신
+      - [요구사항] 첫 앵커를 찾은 뒤, 종료조건(적중/3패) 충족할 때까지 앵커 유지. 충족 후에만 다음 앵커 탐색.
+      - 종료조건 충족(적중/3패): 종료 포지션 다음(current_pos)부터 앵커 탐색 → active_anchor_idx, search_from 갱신
       - 종료조건 미충족(문자열 끝): anchor_idx 변경 없음 → 현재 앵커 유지
     """
     min_ws = min(WINDOW_SIZES)
     if len(grid_string) < min_ws:
         return {
-            "state": {"current_pos": 0, "active_anchor_idx": 0, "anchor_failure_count": 0, "next_window_size": 9, "anchors": []},
+            "state": {"current_pos": 0, "active_anchor_idx": 0, "anchor_failure_count": 0, "next_window_size": 9, "anchors": [], "search_from": 0},
             "history": [],
             "grid_string": grid_string,
             "summary": {"total_steps": 0, "total_failures": 0, "total_predictions": 0, "total_skipped": 0, "accuracy": 0.0},
@@ -78,7 +79,7 @@ def cold_start(grid_string: str):
     anchors = _anchors_from_grid_string(grid_string)
     if not anchors:
         return {
-            "state": {"current_pos": 0, "active_anchor_idx": 0, "anchor_failure_count": 0, "next_window_size": 9, "anchors": []},
+            "state": {"current_pos": 0, "active_anchor_idx": 0, "anchor_failure_count": 0, "next_window_size": 9, "anchors": [], "search_from": 0},
             "history": [],
             "grid_string": grid_string,
             "summary": {"total_steps": 0, "total_failures": 0, "total_predictions": 0, "total_skipped": 0, "accuracy": 0.0},
@@ -106,7 +107,7 @@ def cold_start(grid_string: str):
             last_mismatched_pos = None
             fail_count = 0
             exited_string_end = False
-            did_finish_anchor = False  # 적중 또는 3패로 이 앵커 종료 → while 탈출 후 state 전달
+            did_finish_anchor = False  # 적중 또는 3패로 이 앵커 종료 → for 탈출 후 다음 앵커로 계속 검증
 
             for window_size in WINDOW_SIZES:
                 pos = next_anchor + window_size - 1
@@ -152,37 +153,42 @@ def cold_start(grid_string: str):
 
                 history.append({"step": total_steps, "position": pos, "anchor": next_anchor, "window_size": window_size, "prefix": prefix, "predicted": predicted, "actual": actual, "is_correct": ok, "confidence": confidence, "skipped": False})
 
-                # 케이스 B: 적중 → 종료 포지션(pos)에서 앵커 리스트 갱신 후, 그 리스트에서 다음 앵커 탐색
+                # 케이스 B: 적중 → [종료조건 충족] 종료 포지션(pos) 다음(current_pos)부터 다음 앵커 탐색. 이전엔 앵커 유지.
                 if ok:
                     current_pos = pos + 1
-                    anchor_idx = _first_anchor_from_position(anchors, pos)
+                    anchor_idx = _first_anchor_from_position(anchors, current_pos)
                     if anchor_idx >= len(anchors):
-                        anchors.append(current_pos)  # 종료 포지션을 다음 앵커로 추가(리스트 업데이트)
+                        anchors.append(current_pos)  # 다음 포지션 이상 앵커 없음 → synthetic 앵커 추가
                         anchor_idx = len(anchors) - 1
                     anchor_consecutive_failures = 0
                     anchor_completed = True
                     did_finish_anchor = True
                     break
 
-                # 케이스 C: 3연속 불일치 → 종료 포지션(ref_pos)에서 앵커 리스트 갱신 후, 그 리스트에서 다음 앵커 탐색
+                # 케이스 C: 3연속 불일치 → [종료조건 충족] 종료 포지션(ref_pos) 다음(current_pos)부터 다음 앵커 탐색. 이전엔 앵커 유지.
                 if fail_count >= MAX_CONSECUTIVE_FAILURES:
                     ref_pos = last_mismatched_pos if last_mismatched_pos is not None else pos
                     current_pos = ref_pos + 1
-                    anchor_idx = _first_anchor_from_position(anchors, ref_pos)
+                    anchor_idx = _first_anchor_from_position(anchors, current_pos)
                     if anchor_idx >= len(anchors):
-                        anchors.append(current_pos)
+                        anchors.append(current_pos)  # synthetic 앵커 추가
                         anchor_idx = len(anchors) - 1
                     anchor_consecutive_failures = 0
                     anchor_completed = True
                     did_finish_anchor = True
                     break
 
+            # [이전] if did_finish_anchor: break → 첫 번째 종료 시 while 탈출, 히스토리가 첫 종료까지만 쌓임.
+            # [수정] 종료 후 다음 앵커로 검증 계속. 문자열 끝(exited_string_end) 또는 앵커 소진 시에만 while 탈출.
             if did_finish_anchor:
-                break  # 케이스 B/C: 종료조건 충족 → while 탈출, state 전달
-            if exited_string_end:
+                pass  # 케이스 B/C: 다음 앵커로 while 계속 (break 제거)
+            elif exited_string_end:
                 anchor_consecutive_failures = fail_count  # 현재 앵커까지의 연속 실패 수
                 break  # 케이스 A: 문자열 끝(종료조건 미충족) → while 탈출, anchor_idx 그대로
-            # for가 break 없이 끝남: 윈도우 다 돌았으나 성공/3패 아님 → 다음 앵커로
+            # for가 break 없이 끝남: 윈도우 다 돌았으나 성공/3패 아님.
+            # [요구사항] 종료조건(적중/3패) 충족 후에만 다음 앵커 탐색. 이 경우는 미충족이므로 이전에는 앵커 유지가 맞음.
+            # [이전] anchor_idx += 1 로 다음 앵커로 전환(종료 없이 전환). 요구사항과 불일치.
+            # [현재] 동일 유지(주석만 추가). 필요 시 "앵커 유지 + current_pos만 진행" 등 별도 처리 검토.
             if not anchor_success and fail_count < MAX_CONSECUTIVE_FAILURES:
                 if last_mismatched_pos is not None:
                     current_pos = last_mismatched_pos + 1
@@ -200,6 +206,7 @@ def cold_start(grid_string: str):
             "anchor_failure_count": anchor_consecutive_failures,
             "next_window_size": next_window_size,
             "anchors": anchors,
+            "search_from": current_pos,  # 종료 시 '다음 포지션'부터 앵커 탐색 기준 (스킵 시 유지)
         }
         acc = ((total_predictions - total_failures) / total_predictions * 100) if total_predictions > 0 else 0.0
         summary = {"total_steps": total_steps, "total_failures": total_failures, "total_predictions": total_predictions, "total_skipped": total_skipped, "accuracy": acc}
@@ -257,6 +264,7 @@ def live_step(state: dict, grid_string: str, history: list, user_input: str):
     """
     사용자 입력(B/P) 한 글자에 대해 단일 스텝 검증만 수행, 히스토리에 한 행 추가.
     전수 검증 없음.
+    [요구사항] 첫 앵커 찾은 뒤, 종료조건(적중/3패) 충족 전까지 앵커 유지. 스킵 시에도 앵커 변경 금지.
     반환: { "state": new_state, "history": extended_history, "grid_string": new_grid_string, "step_result": {...} }
     """
     new_grid_string = grid_string + user_input
@@ -279,10 +287,27 @@ def live_step(state: dict, grid_string: str, history: list, user_input: str):
     step_num = (max((e.get("step", 0) for e in history), default=0)) + 1
 
     if skipped or predicted is None:
-        # 스킵: current_pos만 진행. 앵커 인덱스는 "방금 추가된 위치(next_pos-1) 이상인 첫 앵커" 한 규칙으로만 결정.
+        # 스킵: 예측 없음/스킵 시 current_pos만 진행.
+        # [요구사항] 첫 앵커를 찾은 뒤, 종료조건(적중/3패) 충족 전까지 앵커 유지. 종료 후에만 다음 앵커 탐색.
+        # [이전] 항상 _first_anchor_from_position(new_anchors, search_from)로 "다음 앵커"를 재계산 → 스킵만으로 앵커가 바뀌어 버림.
+        # [수정] 앵커 보유 중(aidx < len)이면 유지; 대기 중(aidx >= len)이면 search_from 기준으로 탐색.
         next_pos = position + 1
         new_anchors = _anchors_from_grid_string(new_grid_string)
-        new_aidx = _first_anchor_from_position(new_anchors, max(0, next_pos - 1))
+        search_from = state.get("search_from", state.get("current_pos", 0))
+
+        if aidx < len(anchors):
+            # 앵커 보유 중: 종료조건 미충족이므로 앵커 유지. new_anchors에서 동일 위치(anchors[aidx])의 인덱스 사용.
+            # _first_anchor_from_position(..., search_from) 사용 금지 → 다음 앵커 탐색은 종료 이후에만.
+            # 단, synthetic(위치가 new_anchors에 없음)이면 대기로 간주하고 search_from 기준 탐색.
+            old_anchor_pos = anchors[aidx]
+            new_aidx = next((i for i in range(len(new_anchors)) if new_anchors[i] == old_anchor_pos), len(new_anchors))
+            if new_aidx >= len(new_anchors):
+                # synthetic 또는 보유 앵커가 새 문자열에 없음 → 대기. search_from 기준 탐색.
+                new_aidx = _first_anchor_from_position(new_anchors, search_from)
+            # else: 동일 앵커 유지
+        else:
+            # 대기 중(aidx >= len): search_from 이상 첫 앵커 탐색. 채택 가능하면 adoption, 아니면 대기 유지.
+            new_aidx = _first_anchor_from_position(new_anchors, search_from)
 
         new_history = history
         new_state = {
@@ -291,6 +316,7 @@ def live_step(state: dict, grid_string: str, history: list, user_input: str):
             "anchor_failure_count": fc,
             "next_window_size": state.get("next_window_size", 9),
             "anchors": new_anchors,
+            "search_from": search_from,
         }
         return {"state": new_state, "history": new_history, "grid_string": new_grid_string, "step_result": {"skipped": True, "waiting": new_aidx >= len(new_anchors)}}
 
@@ -311,19 +337,25 @@ def live_step(state: dict, grid_string: str, history: list, user_input: str):
 
     next_pos = position + 1
     new_anchors = _anchors_from_grid_string(new_grid_string)  # 실제값 입력될 때마다 앵커 리스트 업데이트
+    search_from = state.get("search_from", state.get("current_pos", 0))
 
     if ok:
-        new_anchor_idx = _first_anchor_from_position(new_anchors, next_pos)
+        # [종료조건 충족] 적중 → 다음 앵커 탐색(next_pos부터). search_from 갱신.
+        new_search_from = next_pos
+        new_anchor_idx = _first_anchor_from_position(new_anchors, new_search_from)
         new_fc = 0
         new_next_window = 9
     else:
         new_fc = fc + 1
         if new_fc >= MAX_CONSECUTIVE_FAILURES:
-            new_anchor_idx = _first_anchor_from_position(new_anchors, next_pos)
+            # [종료조건 충족] 3연속 실패 → 다음 앵커 탐색(next_pos부터). search_from 갱신.
+            new_search_from = next_pos
+            new_anchor_idx = _first_anchor_from_position(new_anchors, new_search_from)
             new_fc = 0
             new_next_window = 9
         else:
-            # 같은 앵커 유지 → 갱신된 리스트에서 이전 앵커 값(anchors[aidx])의 인덱스 찾기
+            # [종료조건 미충족] 같은 앵커 유지. search_from 변경 없음. 갱신 리스트에서 동일 앵커(anchors[aidx]) 인덱스 유지.
+            new_search_from = search_from
             old_val = anchors[aidx] if aidx < len(anchors) else None
             new_anchor_idx = next((i for i in range(len(new_anchors)) if new_anchors[i] == old_val), len(new_anchors))
             if new_anchor_idx >= len(new_anchors):
@@ -337,6 +369,7 @@ def live_step(state: dict, grid_string: str, history: list, user_input: str):
         "anchor_failure_count": new_fc,
         "next_window_size": new_next_window,
         "anchors": new_anchors,
+        "search_from": new_search_from,
     }
 
     return {
@@ -469,11 +502,12 @@ def main():
         aidx = state.get("active_anchor_idx", 0)
         fc = state.get("anchor_failure_count", 0)
         nw = state.get("next_window_size", 9)
+        sf = state.get("search_from", cp)
         anchors_now = state.get("anchors") or []
         aidx_label = f"a{aidx}" if aidx < len(anchors_now) else f"{aidx} (다음 앵커 대기)"
         st.markdown(
-            f"**포지션 인덱스** = {cp} · **앵커 인덱스** = {aidx} ({aidx_label}) · "
-            f"anchor_failure_count = {fc} · next_window_size = {nw}"
+            f"**current_pos** = {cp} · **앵커** = {aidx} ({aidx_label}) · "
+            f"failure_count = {fc} · next_window = {nw} · **search_from** = {sf}"
         )
         st.caption("위 Grid의 ‘포지션 인덱스’·‘앵커 인덱스(a0,a1,…)’와 동일한 0-based 기준")
 

@@ -9,8 +9,8 @@ Change-point 가설 테스트 앱
 import sys
 from pathlib import Path
 
-# 상위 폴더의 모듈을 import하기 위해 경로 추가
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# 상위 폴더의 모듈을 import하기 위해 경로 추가 (resolve()로 CWD와 무관하게 프로젝트 루트 지정)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import streamlit as st
 import pandas as pd

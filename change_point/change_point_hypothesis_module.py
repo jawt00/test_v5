@@ -2636,6 +2636,221 @@ def validate_first_anchor_extended_window_v3_cp(
         conn.close()
 
 
+def validate_first_anchor_extended_window_v3_cp_from_string(
+    grid_string: str,
+    window_sizes=(9, 10, 11, 12, 13, 14),
+    method="빈도 기반",
+    threshold=0,
+    stop_on_match=False,
+):
+    """
+    grid_string을 직접 입력받아 V3 검증 수행.
+    validate_first_anchor_extended_window_v3_cp와 동일한 로직.
+    테스트/앱에서 grid_string 입력 시 사용.
+
+    Returns:
+        dict: validate_first_anchor_extended_window_v3_cp와 동일한 구조
+              (grid_string_id 대신 "grid_string" 필드 포함)
+    """
+    if not grid_string or not isinstance(grid_string, str):
+        return {
+            "grid_string": grid_string or "",
+            "max_consecutive_failures": 0,
+            "total_steps": 0,
+            "total_failures": 0,
+            "total_predictions": 0,
+            "total_skipped": 0,
+            "accuracy": 0.0,
+            "history": [],
+            "stopped_early": False,
+        }
+    max_ws = max(window_sizes)
+    if len(grid_string) < max_ws:
+        return {
+            "grid_string": grid_string,
+            "max_consecutive_failures": 0,
+            "total_steps": 0,
+            "total_failures": 0,
+            "total_predictions": 0,
+            "total_skipped": 0,
+            "accuracy": 0.0,
+            "history": [],
+            "stopped_early": False,
+        }
+
+    # Change-point Detection: 앵커 위치 수집
+    anchors = []
+    for i in range(len(grid_string) - 1):
+        if grid_string[i] != grid_string[i + 1]:
+            anchors.append(i)
+    anchors = sorted(list(set(anchors)))
+
+    if not anchors:
+        return {
+            "grid_string": grid_string,
+            "max_consecutive_failures": 0,
+            "total_steps": 0,
+            "total_failures": 0,
+            "total_predictions": 0,
+            "total_skipped": 0,
+            "accuracy": 0.0,
+            "history": [],
+            "stopped_early": False,
+        }
+
+    conn = get_change_point_db_connection()
+    try:
+        history = []
+        consecutive_failures = 0
+        max_consecutive_failures = 0
+        total_steps = 0
+        total_failures = 0
+        total_predictions = 0
+        total_skipped = 0
+        stopped_early = False
+        current_pos = 0
+        MAX_CONSECUTIVE_FAILURES = 3
+        anchor_idx = 0
+
+        while current_pos < len(grid_string) and anchor_idx < len(anchors):
+            while anchor_idx < len(anchors) and anchors[anchor_idx] < current_pos:
+                anchor_idx += 1
+            if anchor_idx >= len(anchors):
+                break
+
+            next_anchor = anchors[anchor_idx]
+            anchor_consecutive_failures = 0
+            anchor_success = False
+            last_mismatched_pos = None
+            anchor_processed_any = False
+
+            for window_size in window_sizes:
+                pos = next_anchor + window_size - 1
+                if pos >= len(grid_string):
+                    break
+                if pos < current_pos:
+                    continue
+
+                total_steps += 1
+                actual = grid_string[pos]
+                prefix_len = window_size - 1
+                prefix = grid_string[pos - prefix_len : pos]
+
+                q = """
+                    SELECT predicted_value, confidence, b_ratio, p_ratio
+                    FROM simulation_predictions_change_point
+                    WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
+                    LIMIT 1
+                """
+                df_pred = pd.read_sql_query(q, conn, params=[window_size, prefix, method, threshold])
+
+                if len(df_pred) == 0:
+                    total_skipped += 1
+                    history.append({
+                        "step": total_steps,
+                        "position": pos,
+                        "anchor": next_anchor,
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": None,
+                        "actual": actual,
+                        "is_correct": None,
+                        "confidence": 0.0,
+                        "selected_window_size": window_size,
+                        "all_predictions": [],
+                        "skipped": True,
+                        "skip_reason": "예측 테이블에 값 없음",
+                    })
+                    continue
+
+                anchor_processed_any = True
+                row = df_pred.iloc[0]
+                predicted = row["predicted_value"]
+                confidence = row["confidence"]
+                ok = predicted == actual
+                total_predictions += 1
+
+                if not ok:
+                    consecutive_failures += 1
+                    anchor_consecutive_failures += 1
+                    total_failures += 1
+                    last_mismatched_pos = pos
+                    if consecutive_failures > max_consecutive_failures:
+                        max_consecutive_failures = consecutive_failures
+                else:
+                    consecutive_failures = 0
+                    anchor_success = True
+                    anchor_consecutive_failures = 0
+
+                history.append({
+                    "step": total_steps,
+                    "position": pos,
+                    "anchor": next_anchor,
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": predicted,
+                    "actual": actual,
+                    "is_correct": ok,
+                    "confidence": confidence,
+                    "selected_window_size": window_size,
+                    "all_predictions": [{
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": predicted,
+                        "confidence": confidence,
+                        "b_ratio": row["b_ratio"],
+                        "p_ratio": row["p_ratio"],
+                    }],
+                    "skipped": False,
+                })
+
+                if ok:
+                    current_pos = pos + 1
+                    anchor_idx += 1
+                    break
+
+                if anchor_consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    if last_mismatched_pos is not None:
+                        current_pos = last_mismatched_pos + 1
+                    else:
+                        current_pos = pos + 1
+                    anchor_idx += 1
+                    break
+
+            if not anchor_success and anchor_consecutive_failures < MAX_CONSECUTIVE_FAILURES:
+                if anchor_processed_any and last_mismatched_pos is not None:
+                    current_pos = last_mismatched_pos + 1
+                elif anchor_processed_any:
+                    max_pos = min(next_anchor + max(window_sizes) - 1, len(grid_string) - 1)
+                    current_pos = max_pos + 1
+                else:
+                    max_pos = min(next_anchor + max(window_sizes) - 1, len(grid_string) - 1)
+                    if max_pos >= current_pos:
+                        current_pos = max_pos + 1
+                    else:
+                        current_pos = len(grid_string)
+                anchor_idx += 1
+
+            if stop_on_match and anchor_success:
+                stopped_early = True
+                break
+
+        acc = ((total_predictions - total_failures) / total_predictions * 100) if total_predictions > 0 else 0.0
+        return {
+            "grid_string": grid_string,
+            "max_consecutive_failures": max_consecutive_failures,
+            "total_steps": total_steps,
+            "total_failures": total_failures,
+            "total_predictions": total_predictions,
+            "total_skipped": total_skipped,
+            "accuracy": acc,
+            "history": history,
+            "stopped_early": stopped_early,
+        }
+    finally:
+        conn.close()
+
+
 # ============================================================================
 # 첫 앵커 확장 윈도우 V3 + 라이브 게임형 다음 앵커 선택 (신규 가설)
 # ============================================================================

@@ -153,7 +153,7 @@ git push origin change_point
 12 56 70 
 
 
-git checkout -b change_point-v2 (수정된 내용이 v2로 따라옵니다)
+git checkout -b change_point-v2
 
 git pull origin change_point-v2
 

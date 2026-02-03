@@ -164,6 +164,10 @@ git commit -m "$(date +%Y%m%d_%H%M)"
 git push -u origin change_point-v2
 
 
+
+
+git reset --hard origin/change_point-v2
+
 윈도우 크기=10, 임계값=59.0%
 12 64 13%
 11 60
@@ -183,3 +187,10 @@ git push -u origin change_point-v2
 11 x 
 12 64 
 윈도우 크기=10, 임계값=59.0%
+
+입력글자제한 제거 
+8글자부터 예측 가능하도록 
+
+시뮬레이션 결과 저장
+설계
+

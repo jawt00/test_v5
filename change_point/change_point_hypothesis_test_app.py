@@ -32,6 +32,7 @@ from change_point_hypothesis_module import (
     generate_simulation_predictions_table,
     HYPOTHESIS_REGISTRY,
 )
+from results_storage import save_run_results
 
 st.set_page_config(
     page_title="Change-point 가설 테스트",
@@ -657,6 +658,21 @@ def main():
                 with col5:
                     st.metric("스킵 횟수", f"{sm.get('total_skipped', 0):,}")
                 
+                # 결과 저장 (수동): V3 단일 테스트이고 상세 히스토리가 있을 때만
+                run_params = st.session_state.get("test_run_params")
+                if run_params and run_params.get("hypothesis_key") == "first_anchor_extended_window_v3":
+                    if st.button("결과 저장", key="save_results_btn", type="secondary", use_container_width=True):
+                        try:
+                            run_id = save_run_results(
+                                run_meta=run_params,
+                                results=rr,
+                                summary=sm,
+                            )
+                            st.success(f"저장 완료. run_id: {run_id}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"저장 실패: {e}")
+                
                 # 최대 연속 불일치별 케이스 개수 통계
                 st.markdown("#### 최대 연속 불일치별 케이스 개수")
                 failure_counts = {}
@@ -1035,6 +1051,14 @@ def main():
                             **hyp_config
                         )
                     st.session_state["test_results"] = res
+                    # 결과 저장 버튼용 파라미터 보관 (test_cutoff 삭제 전에 설정)
+                    st.session_state["test_run_params"] = {
+                        "hypothesis_key": hyp_name,
+                        "cutoff_grid_string_id": cutoff_sim,
+                        "window_sizes": list(ws),
+                        "method": method_sim,
+                        "threshold": thresh_sim,
+                    }
                     bar.progress(1.0)
                     status.text("완료")
                     # 시뮬레이션 완료 후 재실행 트리거 제거하고 결과 표시를 위해 한 번 더 실행

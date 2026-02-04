@@ -16,6 +16,7 @@ import streamlit as st
 import pandas as pd
 
 from svg_parser_module import get_change_point_db_connection
+from results_storage import save_live_run_results
 
 st.set_page_config(
     page_title="Change-point 플로우 라이브 게임",
@@ -27,6 +28,8 @@ WINDOW_SIZES = (9, 10, 11, 12, 13, 14)
 METHOD = "빈도 기반"
 THRESHOLD = 0
 MAX_CONSECUTIVE_FAILURES = 3
+# 게임 시작 허용 최소 글자 수. 6글자부터 시작 가능하며, 예측 가능해지면(예: 8글자+앵커0) 그때부터 검증·실제값 반영.
+MIN_GRID_LENGTH = 6
 
 
 def _anchors_from_grid_string(grid_string: str):
@@ -67,7 +70,7 @@ def cold_start(grid_string: str):
       - 종료조건 미충족(문자열 끝): anchor_idx 변경 없음 → 현재 앵커 유지
     """
     min_ws = min(WINDOW_SIZES)
-    if len(grid_string) < min_ws:
+    if len(grid_string) < MIN_GRID_LENGTH:
         return {
             "state": {"current_pos": 0, "active_anchor_idx": 0, "anchor_failure_count": 0, "next_window_size": 9, "anchors": [], "search_from": 0},
             "history": [],
@@ -492,8 +495,8 @@ def main():
             s = (grid_input or "").strip()
             if not s:
                 st.warning("Grid String을 입력하세요.")
-            elif len(s) < min(WINDOW_SIZES):
-                st.warning(f"길이는 최소 {min(WINDOW_SIZES)} 이상이어야 합니다.")
+            elif len(s) < MIN_GRID_LENGTH:
+                st.warning(f"길이는 최소 {MIN_GRID_LENGTH}글자 이상이어야 합니다.")
             else:
                 with st.spinner("Cold Start 검증 실행 중..."):
                     try:
@@ -505,6 +508,7 @@ def main():
     with col_reset:
         if st.button("🔄 초기화", use_container_width=True, key="flow_btn_reset"):
             st.session_state.flow_result = None
+            st.session_state.pop("flow_last_saved", None)
             st.rerun()
 
     result = st.session_state.flow_result
@@ -597,6 +601,27 @@ def main():
         c3.metric("총 실패", summary.get("total_failures", 0))
         c4.metric("스킵", summary.get("total_skipped", 0))
         c5.metric("정확도", f"{summary.get('accuracy', 0):.1f}%")
+
+        st.markdown("#### 결과 저장")
+        if st.session_state.get("flow_last_saved"):
+            last = st.session_state.flow_last_saved
+            st.success(f"**저장됨** · run_id: `{last.get('run_id', '')}`")
+        if st.button("결과 저장", key="flow_save_results", type="secondary", use_container_width=True):
+            try:
+                run_id = save_live_run_results(
+                    run_meta={
+                        "method": METHOD,
+                        "threshold": THRESHOLD,
+                        "window_sizes": list(WINDOW_SIZES),
+                        "grid_string": gs,
+                    },
+                    history=history,
+                    summary=summary,
+                )
+                st.session_state.flow_last_saved = {"run_id": run_id}
+                st.rerun()
+            except Exception as e:
+                st.error(f"저장 실패: {e}")
 
 
 if __name__ == "__main__":

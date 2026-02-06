@@ -709,7 +709,8 @@ def main():
         ### Change-point Detection 기반 N-gram 생성 앱 사용 방법
         
         1. **SVG 코드 입력 및 파싱**
-           - SVG 코드를 입력하고 '파싱' 버튼 클릭
+           - SVG 코드를 텍스트 영역에 붙여넣고 '파싱' 버튼 클릭
+           - 현재 지원하는 클래스명: `rw_rz` (메인 컨테이너), `rw_qM` (행), `rw_rB` (셀)
            - 파싱된 Grid String과 시각화가 표시됩니다
         
         2. **DB 저장 (자동 N-gram 생성 포함)**
@@ -733,6 +734,9 @@ def main():
         - **Trigger**: `Input[i] ≠ Input[i+1]` 일 때 변화점 감지
         - **Anchor**: 변화 감지 이전 위치 (i)를 앵커로 사용
         - 앵커 위치에서만 N-gram 생성 (기존 슬라이딩 윈도우와 다름)
+        
+        ### 주의사항
+        - 클래스명이 변경되면 `svg_parser_module.py`의 `parse_bead_road_svg` 함수를 수정해야 합니다
         """)
 
 

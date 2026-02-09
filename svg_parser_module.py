@@ -14,6 +14,11 @@ from bs4 import BeautifulSoup
 TABLE_WIDTH = 15
 TABLE_HEIGHT = 6
 
+# [유지보수] Bead Road 그리드 HTML 클래스명 (변경 시 parse_bead_road_svg 및 docstring 동기화)
+BEAD_ROAD_MAIN_CONTAINER_CLASS = 'rw_rz'
+BEAD_ROAD_ROW_CLASS = 'rw_qM'
+BEAD_ROAD_CELL_CLASS = 'rw_rB'
+
 # DB 경로 (hypothesis_validation_app.py와 동일한 DB 사용)
 DB_PATH = 'hypothesis_validation.db'
 
@@ -55,28 +60,24 @@ def parse_bead_road_svg(svg_code):
     - 이전: rg_rl → qz_qF (셀)
     
     다음 변경 시 이 부분만 수정하면 됩니다:
-    - main_container = soup.find('div', class_='rw_rz')
-    - rows = main_container.find_all('div', class_='rw_qM')
-    - cells = row.find_all('div', class_='rw_rB')
+    - BEAD_ROAD_MAIN_CONTAINER_CLASS, BEAD_ROAD_ROW_CLASS, BEAD_ROAD_CELL_CLASS 상수 3개
     """
     soup = BeautifulSoup(svg_code, 'html.parser')
     # 그리드 초기화: 각 셀을 명시적으로 빈 문자열로 초기화
     grid = [['' for _ in range(TABLE_HEIGHT)] for _ in range(TABLE_WIDTH)]
     
-    # [유지보수] 클래스명 변경 시 이 부분만 수정
-    main_container = soup.find('div', class_='rw_rz')
+    # [유지보수] 클래스명 변경 시 상수 BEAD_ROAD_* 만 수정
+    main_container = soup.find('div', class_=BEAD_ROAD_MAIN_CONTAINER_CLASS)
     if not main_container:
         return grid
     
-    # [유지보수] 클래스명 변경 시 이 부분만 수정
-    rows = main_container.find_all('div', class_='rw_qM')
+    rows = main_container.find_all('div', class_=BEAD_ROAD_ROW_CLASS)
     
     for row_idx, row in enumerate(rows):
         if row_idx >= TABLE_HEIGHT:
             break
         
-        # [유지보수] 클래스명 변경 시 이 부분만 수정
-        cells = row.find_all('div', class_='rw_rB')
+        cells = row.find_all('div', class_=BEAD_ROAD_CELL_CLASS)
         for col_idx, cell in enumerate(cells):
             if col_idx >= TABLE_WIDTH:
                 break

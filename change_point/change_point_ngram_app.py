@@ -12,6 +12,7 @@ import time
 # 상위 디렉토리의 모듈 import를 위한 경로 추가
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import svg_parser_module as _svg_parser
 from svg_parser_module import (
     parse_bead_road_svg,
     grid_to_string_column_wise,
@@ -20,8 +21,10 @@ from svg_parser_module import (
     create_change_point_ngram_chunks_table,
     generate_and_save_ngram_chunks_change_point,
     TABLE_WIDTH,
-    TABLE_HEIGHT
+    TABLE_HEIGHT,
 )
+# 파싱에 사용하는 메인 컨테이너 클래스명 (모듈 상수와 동기화, 없으면 기본값)
+BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'rw_rz')
 
 # 페이지 설정
 st.set_page_config(
@@ -410,6 +413,10 @@ def main():
     
     # SVG 입력 섹션
     st.header("📝 SVG 코드 입력")
+    # 브라우저 콘솔에서 그리드 HTML 복사용 (파싱 클래스명과 동기화)
+    copy_cmd = f"copy(document.querySelector('.{BEAD_ROAD_MAIN_CONTAINER_CLASS}').outerHTML);"
+    st.caption("브라우저 개발자도구 콘솔에서 그리드 복사:")
+    st.code(copy_cmd, language="javascript")
     
     # SVG 입력 리셋을 위한 key 관리
     if 'svg_input_key_counter' not in st.session_state:

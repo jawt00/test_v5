@@ -458,3 +458,440 @@ def save_run_results(run_meta, results, summary, db_path=None):
         raise
     finally:
         conn.close()
+
+
+# =============================================================================
+# 조회 함수 (Results Viewer 앱용)
+# =============================================================================
+
+
+def query_simulation_by_grid_string_id(grid_string_id, db_path=None):
+    """
+    grid_string_id로 시뮬레이션 결과 조회.
+    해당 grid_string_id를 검증한 run 목록 및 각 run의 grid_result 반환.
+
+    Returns:
+        list of dict: [{"run_id", "run_meta", "run_summary", "grid_result"}, ...]
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        import pandas as pd
+        df_gr = pd.read_sql_query(
+            """
+            SELECT gr.run_id, gr.grid_string_id, gr.accuracy, gr.max_consecutive_failures,
+                   gr.total_steps, gr.total_failures, gr.total_predictions, gr.total_skipped, gr.stopped_early
+            FROM grid_results gr
+            WHERE gr.grid_string_id = ?
+            ORDER BY gr.run_id
+            """,
+            conn,
+            params=[grid_string_id],
+        )
+        if len(df_gr) == 0:
+            return []
+
+        run_ids = df_gr["run_id"].unique().tolist()
+        placeholders = ",".join("?" * len(run_ids))
+        df_runs = pd.read_sql_query(
+            f"SELECT * FROM runs WHERE run_id IN ({placeholders})",
+            conn,
+            params=run_ids,
+        )
+        df_sum = pd.read_sql_query(
+            f"SELECT * FROM run_summary WHERE run_id IN ({placeholders})",
+            conn,
+            params=run_ids,
+        )
+
+        runs_dict = df_runs.set_index("run_id").to_dict("index") if len(df_runs) > 0 else {}
+        sum_dict = df_sum.set_index("run_id").to_dict("index") if len(df_sum) > 0 else {}
+
+        result = []
+        for _, row in df_gr.iterrows():
+            run_id = row["run_id"]
+            result.append({
+                "run_id": run_id,
+                "run_meta": runs_dict.get(run_id, {}),
+                "run_summary": sum_dict.get(run_id, {}),
+                "grid_result": row.to_dict(),
+            })
+        return result
+    finally:
+        conn.close()
+
+
+def query_simulation_step_events(run_id, grid_string_id, db_path=None):
+    """
+    시뮬레이션 run의 특정 grid_string_id에 대한 step_events 조회.
+
+    Returns:
+        list of dict: step 이벤트 목록
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        import pandas as pd
+        df = pd.read_sql_query(
+            """
+            SELECT step, position, anchor, window_size, prefix, predicted, actual,
+                   is_correct, confidence, selected_window_size, skipped, skip_reason, all_predictions_json
+            FROM step_events
+            WHERE run_id = ? AND grid_string_id = ?
+            ORDER BY step
+            """,
+            conn,
+            params=[run_id, grid_string_id],
+        )
+        return df.to_dict("records") if len(df) > 0 else []
+    finally:
+        conn.close()
+
+
+def query_simulation_run_detail(run_id, db_path=None):
+    """
+    시뮬레이션 run 상세: run_meta, run_summary, grid_results( grid_string_id 목록).
+
+    Returns:
+        dict: {"run_meta", "run_summary", "grid_results"} 또는 None
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        import pandas as pd
+        df_r = pd.read_sql_query("SELECT * FROM runs WHERE run_id = ?", conn, params=[run_id])
+        df_s = pd.read_sql_query("SELECT * FROM run_summary WHERE run_id = ?", conn, params=[run_id])
+        df_g = pd.read_sql_query(
+            "SELECT * FROM grid_results WHERE run_id = ? ORDER BY grid_string_id",
+            conn,
+            params=[run_id],
+        )
+        if len(df_r) == 0:
+            return None
+        return {
+            "run_meta": df_r.iloc[0].to_dict(),
+            "run_summary": df_s.iloc[0].to_dict() if len(df_s) > 0 else {},
+            "grid_results": df_g.to_dict("records") if len(df_g) > 0 else [],
+        }
+    finally:
+        conn.close()
+
+
+def query_live_run_detail(run_id, db_path=None):
+    """
+    라이브 run 상세: run_meta, run_summary, step_events.
+
+    Returns:
+        dict: {"run_meta", "run_summary", "step_events"} 또는 None
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        init_live_results_schema(conn)
+        import pandas as pd
+        df_r = pd.read_sql_query("SELECT * FROM live_runs WHERE run_id = ?", conn, params=[run_id])
+        df_s = pd.read_sql_query("SELECT * FROM live_run_summary WHERE run_id = ?", conn, params=[run_id])
+        df_e = pd.read_sql_query(
+            "SELECT * FROM live_step_events WHERE run_id = ? ORDER BY step",
+            conn,
+            params=[run_id],
+        )
+        if len(df_r) == 0:
+            return None
+        return {
+            "run_meta": df_r.iloc[0].to_dict(),
+            "run_summary": df_s.iloc[0].to_dict() if len(df_s) > 0 else {},
+            "step_events": df_e.to_dict("records") if len(df_e) > 0 else [],
+        }
+    finally:
+        conn.close()
+
+
+def query_live_runs_list(limit=100, db_path=None):
+    """
+    라이브 run 목록 (최신순).
+
+    Returns:
+        list of dict: [{"run_id", "created_at", "grid_string_preview"}, ...]
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        init_live_results_schema(conn)
+        import pandas as pd
+        df = pd.read_sql_query(
+            """
+            SELECT run_id, created_at, grid_string
+            FROM live_runs
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            conn,
+            params=[limit],
+        )
+        rows = []
+        for _, r in df.iterrows():
+            gs = r.get("grid_string") or ""
+            preview = (gs[:50] + "..." if len(gs) > 50 else gs) or "(empty)"
+            rows.append({
+                "run_id": r["run_id"],
+                "created_at": r["created_at"],
+                "grid_string_preview": preview,
+            })
+        return rows
+    finally:
+        conn.close()
+
+
+def query_simulation_runs_list(limit=100, db_path=None):
+    """
+    시뮬레이션 run 목록 (최신순).
+
+    Returns:
+        list of dict: [{"run_id", "created_at", "hypothesis_key", "cutoff_grid_string_id"}, ...]
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        import pandas as pd
+        df = pd.read_sql_query(
+            """
+            SELECT run_id, created_at, hypothesis_key, cutoff_grid_string_id, method, threshold
+            FROM runs
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            conn,
+            params=[limit],
+        )
+        return df.to_dict("records") if len(df) > 0 else []
+    finally:
+        conn.close()
+
+
+def query_simulation_stats(db_path=None):
+    """
+    시뮬레이션 전체 통계.
+
+    Returns:
+        dict: {
+            "total_runs": int,
+            "total_grid_results": int,
+            "max_consecutive_failures_dist": {0: n, 1: n, ...},
+            "avg_max_consecutive_failures": float,
+            "worst_max_consecutive_failures": int,
+            "avg_accuracy_overall": float,
+        }
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        import pandas as pd
+        df_agg = pd.read_sql_query(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM runs) AS total_runs,
+                (SELECT COUNT(*) FROM grid_results) AS total_grid_results,
+                (SELECT COALESCE(AVG(max_consecutive_failures), 0) FROM grid_results) AS avg_mcf,
+                (SELECT COALESCE(MAX(max_consecutive_failures), 0) FROM grid_results) AS worst_mcf,
+                (SELECT COALESCE(AVG(accuracy), 0) FROM grid_results) AS avg_acc
+            """,
+            conn,
+        )
+        df_dist = pd.read_sql_query(
+            """
+            SELECT max_consecutive_failures AS mcf, COUNT(*) AS cnt
+            FROM grid_results
+            GROUP BY max_consecutive_failures
+            ORDER BY max_consecutive_failures
+            """,
+            conn,
+        )
+        row = df_agg.iloc[0] if len(df_agg) > 0 else {}
+        dist = {}
+        for _, r in df_dist.iterrows():
+            k = int(r["mcf"]) if r["mcf"] is not None else 0
+            dist[k] = int(r["cnt"])
+        return {
+            "total_runs": int(row.get("total_runs", 0) or 0),
+            "total_grid_results": int(row.get("total_grid_results", 0) or 0),
+            "max_consecutive_failures_dist": dist,
+            "avg_max_consecutive_failures": float(row.get("avg_mcf", 0) or 0),
+            "worst_max_consecutive_failures": int(row.get("worst_mcf", 0) or 0),
+            "avg_accuracy_overall": float(row.get("avg_acc", 0) or 0),
+        }
+    finally:
+        conn.close()
+
+
+def query_live_stats(db_path=None):
+    """
+    라이브 전체 통계.
+
+    Returns:
+        dict: {
+            "total_runs": int,
+            "max_consecutive_failures_dist": {0: n, 1: n, ...},
+            "avg_max_consecutive_failures": float,
+            "worst_max_consecutive_failures": int,
+            "avg_accuracy_overall": float,
+        }
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        init_live_results_schema(conn)
+        import pandas as pd
+        df_agg = pd.read_sql_query(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM live_runs) AS total_runs,
+                (SELECT COALESCE(AVG(max_consecutive_failures), 0) FROM live_run_summary) AS avg_mcf,
+                (SELECT COALESCE(MAX(max_consecutive_failures), 0) FROM live_run_summary) AS worst_mcf,
+                (SELECT COALESCE(AVG(accuracy), 0) FROM live_run_summary) AS avg_acc
+            """,
+            conn,
+        )
+        df_dist = pd.read_sql_query(
+            """
+            SELECT max_consecutive_failures AS mcf, COUNT(*) AS cnt
+            FROM live_run_summary
+            GROUP BY max_consecutive_failures
+            ORDER BY max_consecutive_failures
+            """,
+            conn,
+        )
+        row = df_agg.iloc[0] if len(df_agg) > 0 else {}
+        dist = {}
+        for _, r in df_dist.iterrows():
+            k = int(r["mcf"]) if r["mcf"] is not None else 0
+            dist[k] = int(r["cnt"])
+        return {
+            "total_runs": int(row.get("total_runs", 0) or 0),
+            "max_consecutive_failures_dist": dist,
+            "avg_max_consecutive_failures": float(row.get("avg_mcf", 0) or 0),
+            "worst_max_consecutive_failures": int(row.get("worst_mcf", 0) or 0),
+            "avg_accuracy_overall": float(row.get("avg_acc", 0) or 0),
+        }
+    finally:
+        conn.close()
+
+
+def query_simulation_high_failure_results(
+    min_max_consecutive_failures=1,
+    limit=100,
+    hypothesis_key=None,
+    db_path=None,
+):
+    """
+    grid_results 기준, max_consecutive_failures >= threshold인 행.
+    runs와 JOIN하여 hypothesis_key, cutoff, created_at 포함.
+
+    Returns:
+        list of dict: [{
+            "run_id", "grid_string_id", "hypothesis_key", "cutoff_grid_string_id",
+            "created_at", "max_consecutive_failures", "accuracy",
+            "total_predictions", "total_skipped", "total_failures",
+            "method", "threshold"
+        }, ...]
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        import pandas as pd
+        if hypothesis_key:
+            df = pd.read_sql_query(
+                """
+                SELECT gr.run_id, gr.grid_string_id, gr.max_consecutive_failures, gr.accuracy,
+                       gr.total_predictions, gr.total_skipped, gr.total_failures,
+                       r.hypothesis_key, r.cutoff_grid_string_id, r.created_at, r.method, r.threshold
+                FROM grid_results gr
+                JOIN runs r ON gr.run_id = r.run_id
+                WHERE gr.max_consecutive_failures >= ? AND r.hypothesis_key = ?
+                ORDER BY gr.max_consecutive_failures DESC, r.created_at DESC
+                LIMIT ?
+                """,
+                conn,
+                params=[min_max_consecutive_failures, hypothesis_key, limit],
+            )
+        else:
+            df = pd.read_sql_query(
+                """
+                SELECT gr.run_id, gr.grid_string_id, gr.max_consecutive_failures, gr.accuracy,
+                       gr.total_predictions, gr.total_skipped, gr.total_failures,
+                       r.hypothesis_key, r.cutoff_grid_string_id, r.created_at, r.method, r.threshold
+                FROM grid_results gr
+                JOIN runs r ON gr.run_id = r.run_id
+                WHERE gr.max_consecutive_failures >= ?
+                ORDER BY gr.max_consecutive_failures DESC, r.created_at DESC
+                LIMIT ?
+                """,
+                conn,
+                params=[min_max_consecutive_failures, limit],
+            )
+        return df.to_dict("records") if len(df) > 0 else []
+    finally:
+        conn.close()
+
+
+def query_live_high_failure_results(
+    min_max_consecutive_failures=1,
+    limit=100,
+    db_path=None,
+):
+    """
+    live_run_summary JOIN live_runs.
+    max_consecutive_failures >= threshold인 run 목록.
+
+    Returns:
+        list of dict: [{
+            "run_id", "created_at", "max_consecutive_failures", "accuracy",
+            "total_predictions", "total_skipped", "total_failures",
+            "grid_string_preview"
+        }, ...]
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        init_live_results_schema(conn)
+        import pandas as pd
+        df = pd.read_sql_query(
+            """
+            SELECT s.run_id, r.created_at, s.max_consecutive_failures, s.accuracy,
+                   s.total_predictions, s.total_skipped, s.total_failures,
+                   r.grid_string
+            FROM live_run_summary s
+            JOIN live_runs r ON s.run_id = r.run_id
+            WHERE s.max_consecutive_failures >= ?
+            ORDER BY s.max_consecutive_failures DESC, r.created_at DESC
+            LIMIT ?
+            """,
+            conn,
+            params=[min_max_consecutive_failures, limit],
+        )
+        rows = []
+        for _, r in df.iterrows():
+            gs = r.get("grid_string") or ""
+            preview = (gs[:50] + "..." if len(gs) > 50 else gs) or "(empty)"
+            rows.append({
+                "run_id": r["run_id"],
+                "created_at": r["created_at"],
+                "max_consecutive_failures": r["max_consecutive_failures"],
+                "accuracy": r["accuracy"],
+                "total_predictions": r["total_predictions"],
+                "total_skipped": r["total_skipped"],
+                "total_failures": r["total_failures"],
+                "grid_string_preview": preview,
+            })
+        return rows
+    finally:
+        conn.close()
+
+
+def query_simulation_hypothesis_keys(db_path=None):
+    """
+    시뮬레이션 runs 테이블의 고유 hypothesis_key 목록.
+
+    Returns:
+        list of str
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        import pandas as pd
+        df = pd.read_sql_query(
+            "SELECT DISTINCT hypothesis_key FROM runs ORDER BY hypothesis_key",
+            conn,
+        )
+        return df["hypothesis_key"].tolist() if len(df) > 0 else []
+    finally:
+        conn.close()

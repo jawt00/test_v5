@@ -131,11 +131,16 @@ streamlit run change_point_live_game_app.py
 
 
 streamlit run change_point_hypothesis_test_app.py
+streamlit run change_point_hypothesis_test_app_clone.py
+
 
 streamlit run change_point_live_game_app_v5.py
 
 streamlit run change_point/change_point_v3_verification_test_app.py
 streamlit run change_point_live_game_app_flow_fixed.py
+
+streamlit run change_point_live_game_app_three_modes.py
+
 
 
 cd c:\test_v5\change_point 
@@ -194,3 +199,9 @@ git reset --hard origin/change_point-v2
 시뮬레이션 결과 저장
 설계
 
+
+1/25까지 학
+
+
+
+ppbbbpbpbbpbbbpbppbpppppbpbbppbppbb

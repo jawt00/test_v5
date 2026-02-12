@@ -1,5 +1,5 @@
 """
-Change-point 가설 테스트 앱
+Change-point 가설 테스트 앱 (복제본)
 
 - 다양한 가설을 선택하고 테스트
 - 단일 테스트 모드: 하나의 가설만 테스트
@@ -37,7 +37,7 @@ from change_point_hypothesis_module import (
 from results_storage import save_run_results
 
 st.set_page_config(
-    page_title="Change-point 가설 테스트",
+    page_title="Change-point 가설 테스트 (복제)",
     page_icon="🧪",
     layout="wide",
 )
@@ -90,7 +90,7 @@ def render_hypothesis_config_ui(hypothesis_name, hypothesis_instance, key_prefix
 
 
 def main():
-    st.title("Change-point 가설 테스트")
+    st.title("Change-point 가설 테스트 (복제)")
     st.markdown("""
     다양한 시뮬레이션 가설을 선택하고 테스트할 수 있습니다.
     - **단일 테스트**: 하나의 가설을 상세히 분석
@@ -109,12 +109,6 @@ def main():
         return
     _priority = ["first_anchor_extended_window_v3", "first_anchor_window9_10", "first_anchor_window9_only"]
     available_hypotheses = [h for h in _priority if h in _raw] + [h for h in _raw if h not in _priority]
-    separated_hypotheses = [h for h in available_hypotheses if h in (
-        "first_anchor_extended_window_v3",
-        "first_anchor_extended_window_v3_live_next_anchor",
-        "first_anchor_window9_only",
-        "first_anchor_window9_10",
-    )]
     
     # 테스트 모드 선택
     test_mode = st.radio("테스트 모드", ["단일 테스트", "비교 테스트"], horizontal=True)
@@ -147,7 +141,7 @@ def main():
             available_hypotheses,
             format_func=lambda x: get_hypothesis(x).get_name(),
             key="single_hypothesis",
-            index=0,  # 기본값: 첫 앵커 확장 윈도우 검증 v3 ( 9 - 14 )
+            index=1,  # 기본값: 윈도우 9,10 전용
         )
         
         hypothesis_instance = get_hypothesis(selected_hypothesis_name)
@@ -309,10 +303,10 @@ def main():
             thresh_sim = st.number_input("임계값", 0, 100, 0, key="thresh_extended_v3")
             hypothesis_config = {}
             
-            # V3 전용: 예측값 테이블 생성 버튼
+            # V3 전용: 예측값 테이블 생성 (선택) — 미생성 시 저장된 테이블로 시뮬레이션
             st.markdown("---")
-            st.markdown("#### 🔧 V3 시뮬레이션 예측값 테이블 생성")
-            st.info("💡 V3 검증을 실행하기 전에 먼저 예측값 테이블을 생성해야 합니다.")
+            st.markdown("#### 🔧 V3 시뮬레이션 예측값 테이블 생성 (선택)")
+            st.info("💡 선택 사항: 새로 생성하면 해당 설정으로 덮어쓰고, 생성하지 않으면 **이미 저장된 테이블**로 시뮬레이션이 실행됩니다.")
             
             if st.button("예측값 테이블 생성", key="generate_v3_predictions", type="secondary"):
                 if not ws:
@@ -365,8 +359,8 @@ def main():
             hypothesis_config = {}
             
             st.markdown("---")
-            st.markdown("#### 🔧 V3 라이브 다음 앵커 시뮬레이션 예측값 테이블 생성")
-            st.info("💡 V3와 동일: 검증 전에 예측값 테이블을 먼저 생성해야 합니다.")
+            st.markdown("#### 🔧 V3 라이브 다음 앵커 시뮬레이션 예측값 테이블 생성 (선택)")
+            st.info("💡 선택 사항: 새로 생성하면 해당 설정으로 덮어쓰고, 생성하지 않으면 **이미 저장된 테이블**로 시뮬레이션이 실행됩니다.")
             
             if st.button("예측값 테이블 생성", key="generate_v3_live_predictions", type="secondary"):
                 if not ws:
@@ -409,8 +403,8 @@ def main():
             thresh_sim = st.number_input("임계값", 0, 100, 0, key="thresh_window9_only")
             hypothesis_config = {}
             st.markdown("---")
-            st.markdown("#### 🔧 시뮬레이션 예측값 테이블 생성 (첫 앵커 확장 윈도우와 동일)")
-            st.info("💡 **첫 앵커 확장 윈도우(V3)와 동일한 테이블**을 생성합니다. 윈도우 9~14 저장. 해당 테이블로 라이브 게임도 예측합니다. 검증 시에는 윈도우 9만 사용합니다.")
+            st.markdown("#### 🔧 시뮬레이션 예측값 테이블 생성 (선택, 첫 앵커 확장 윈도우와 동일)")
+            st.info("💡 선택 사항: 새로 생성하면 해당 설정으로 덮어쓰고, 생성하지 않으면 **이미 저장된 테이블**로 시뮬레이션이 실행됩니다. (검증 시 윈도우 9만 사용)")
             if st.button("예측값 테이블 생성", key="generate_window9_predictions", type="secondary"):
                 if cutoff_sim is None:
                     st.warning("Cutoff ID를 선택하세요.")
@@ -451,8 +445,8 @@ def main():
             thresh_sim = st.number_input("임계값", 0, 100, 0, key="thresh_window9_10")
             hypothesis_config = {}
             st.markdown("---")
-            st.markdown("#### 🔧 시뮬레이션 예측값 테이블 생성 (첫 앵커 확장 윈도우와 동일)")
-            st.info("💡 **첫 앵커 확장 윈도우(V3)와 동일한 테이블**을 생성합니다. 윈도우 9~14 저장. 검증 시에는 9·10만 사용합니다.")
+            st.markdown("#### 🔧 시뮬레이션 예측값 테이블 생성 (선택, 첫 앵커 확장 윈도우와 동일)")
+            st.info("💡 선택 사항: 새로 생성하면 해당 설정으로 덮어쓰고, 생성하지 않으면 **이미 저장된 테이블**로 시뮬레이션이 실행됩니다. (검증 시 9·10만 사용)")
             if st.button("예측값 테이블 생성", key="generate_window9_10_predictions", type="secondary"):
                 if cutoff_sim is None:
                     st.warning("Cutoff ID를 선택하세요.")
@@ -511,13 +505,11 @@ def main():
         
         if st.button("시뮬레이션 실행", type="primary", use_container_width=True):
             if is_first_anchor_extended_v3:
-                # V3 독립 검증 함수 사용
+                # V3: 예측값 테이블 생성 없이도 저장된 테이블로 시뮬레이션 실행
                 if not ws:
                     st.warning("최소 하나의 윈도우를 선택하세요.")
                 elif cutoff_sim is None:
                     st.warning("Cutoff ID를 선택하세요.")
-                elif not st.session_state.get("v3_predictions_generated", False):
-                    st.warning("⚠️ 먼저 '예측값 테이블 생성' 버튼을 클릭하여 예측값 테이블을 생성하세요.")
                 else:
                     st.session_state["test_mode"] = "single"
                     st.session_state["test_hypothesis"] = selected_hypothesis_name
@@ -529,13 +521,11 @@ def main():
                     st.session_state["test_results"] = None
                     st.rerun()
             elif is_first_anchor_extended_v3_live_next_anchor:
-                # V3와 동일한 시뮬레이션 실행 방식 복제: 예측값 테이블 생성 후 배치 검증
+                # V3 라이브 다음 앵커: 예측값 테이블 생성 없이도 저장된 테이블로 시뮬레이션 실행
                 if not ws:
                     st.warning("최소 하나의 윈도우를 선택하세요.")
                 elif cutoff_sim is None:
                     st.warning("Cutoff ID를 선택하세요.")
-                elif not st.session_state.get("v3_predictions_generated", False):
-                    st.warning("⚠️ 먼저 '예측값 테이블 생성' 버튼을 클릭하여 예측값 테이블을 생성하세요.")
                 else:
                     st.session_state["test_mode"] = "single"
                     st.session_state["test_hypothesis"] = selected_hypothesis_name
@@ -547,11 +537,9 @@ def main():
                     st.session_state["test_results"] = None
                     st.rerun()
             elif is_first_anchor_window9_only:
-                # 윈도우 9 전용: 첫 앵커 확장 윈도우와 동일한 예측값 테이블(9~14) 생성 후 배치 검증
+                # 윈도우 9 전용: 예측값 테이블 생성 없이도 저장된 테이블로 시뮬레이션 실행
                 if cutoff_sim is None:
                     st.warning("Cutoff ID를 선택하세요.")
-                elif not (st.session_state.get("window9_predictions_generated", False) or st.session_state.get("v3_predictions_generated", False)):
-                    st.warning("⚠️ 먼저 '예측값 테이블 생성' 버튼을 클릭하세요. (첫 앵커 확장 윈도우와 동일한 테이블)")
                 else:
                     st.session_state["test_mode"] = "single"
                     st.session_state["test_hypothesis"] = selected_hypothesis_name
@@ -563,11 +551,9 @@ def main():
                     st.session_state["test_results"] = None
                     st.rerun()
             elif is_first_anchor_window9_10:
-                # 윈도우 9·10: V3와 동일한 예측값 테이블 생성 후 배치 검증
+                # 윈도우 9·10: 예측값 테이블 생성 없이도 저장된 테이블로 시뮬레이션 실행
                 if cutoff_sim is None:
                     st.warning("Cutoff ID를 선택하세요.")
-                elif not (st.session_state.get("window9_10_predictions_generated", False) or st.session_state.get("v3_predictions_generated", False)):
-                    st.warning("⚠️ 먼저 '예측값 테이블 생성' 버튼을 클릭하세요. (첫 앵커 확장 윈도우와 동일한 테이블)")
                 else:
                     st.session_state["test_mode"] = "single"
                     st.session_state["test_hypothesis"] = selected_hypothesis_name
@@ -766,10 +752,10 @@ def main():
     if "test_results" in st.session_state and st.session_state["test_results"] is not None:
         st.markdown("---")
         st.markdown("## 시뮬레이션 결과")
-        res = st.session_state["test_results"]
         
         if st.session_state.get("test_mode") == "single":
             # 단일 테스트 결과
+            res = st.session_state["test_results"]
             rr = res.get("results", [])
             sm = res.get("summary", {})
             
@@ -1117,7 +1103,7 @@ def main():
                                 else:
                                     st.info("히스토리 데이터가 없습니다.")
     
-    # 시뮬레이션 실행 (단일/비교)
+    # 시뮬레이션 실행
     elif "test_cutoff" in st.session_state:
         test_mode = st.session_state.get("test_mode")
         cutoff_sim = st.session_state.get("test_cutoff", 0)

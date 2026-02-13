@@ -16,6 +16,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from svg_parser_module import get_change_point_db_connection
 
+try:
+    from svg_parser_module import get_simulation_predictions_db_connection
+except ImportError:
+    import os
+    import sqlite3
+
+    def get_simulation_predictions_db_connection():
+        """점진적 검증 시뮬레이션 전용 예측 DB 연결 (로컬 fallback)."""
+        db_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "change_point",
+            "simulation_predictions.db",
+        )
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+        conn = sqlite3.connect(db_path, timeout=20.0, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        return conn
+
 
 # ============================================================================
 # Hypothesis 추상 클래스
@@ -2532,6 +2552,7 @@ def validate_first_anchor_extended_window_v3_cp(
     method="빈도 기반",
     threshold=0,
     stop_on_match=False,
+    predictions_conn=None,
 ):
     """
     첫 앵커 확장 윈도우 V3 검증 함수 (앵커 기반 순차 검증 시스템)
@@ -2556,11 +2577,13 @@ def validate_first_anchor_extended_window_v3_cp(
         method: 예측 방법
         threshold: 임계값
         stop_on_match: True이면 일치하는 결과가 나오면 검증 종료
+        predictions_conn: 예측 테이블 조회용 DB 연결. None이면 change_point_ngram.db 사용.
         
     Returns:
         dict: 검증 결과
     """
     conn = get_change_point_db_connection()
+    pred_conn = predictions_conn if predictions_conn is not None else conn
     try:
         df = pd.read_sql_query(
             "SELECT grid_string FROM preprocessed_grid_strings WHERE id = ?",
@@ -2666,7 +2689,7 @@ def validate_first_anchor_extended_window_v3_cp(
                     WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
                     LIMIT 1
                 """
-                df_pred = pd.read_sql_query(q, conn, params=[window_size, prefix, method, threshold])
+                df_pred = pd.read_sql_query(q, pred_conn, params=[window_size, prefix, method, threshold])
                 
                 if len(df_pred) == 0:
                     # 예측값이 없으면 스킵 (연속 실패 카운트에 포함하지 않음)
@@ -2805,6 +2828,7 @@ def validate_first_anchor_window9_only_cp(
     method="빈도 기반",
     threshold=0,
     stop_on_match=False,
+    predictions_conn=None,
 ):
     """
     윈도우 9 전용 검증: 전체 스트링의 모든 앵커에 대해 윈도우 9만 검증.
@@ -2814,6 +2838,7 @@ def validate_first_anchor_window9_only_cp(
     """
     WINDOW_SIZE = 9
     conn = get_change_point_db_connection()
+    pred_conn = predictions_conn if predictions_conn is not None else conn
     try:
         df = pd.read_sql_query(
             "SELECT grid_string FROM preprocessed_grid_strings WHERE id = ?",
@@ -2888,7 +2913,7 @@ def validate_first_anchor_window9_only_cp(
                 WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
                 LIMIT 1
             """
-            df_pred = pd.read_sql_query(q, conn, params=[WINDOW_SIZE, prefix, method, threshold])
+            df_pred = pd.read_sql_query(q, pred_conn, params=[WINDOW_SIZE, prefix, method, threshold])
 
             if len(df_pred) == 0:
                 total_skipped += 1
@@ -2979,6 +3004,7 @@ def validate_first_anchor_window9_10_cp(
     method="빈도 기반",
     threshold=0,
     stop_on_match=False,
+    predictions_conn=None,
 ):
     """
     윈도우 9·10 검증: 전체 스트링의 모든 앵커에 대해 윈도우 9, 10까지 검증 후 해당 앵커 종료.
@@ -2987,6 +3013,7 @@ def validate_first_anchor_window9_10_cp(
     """
     WINDOW_SIZES = (9, 10)
     conn = get_change_point_db_connection()
+    pred_conn = predictions_conn if predictions_conn is not None else conn
     try:
         df = pd.read_sql_query(
             "SELECT grid_string FROM preprocessed_grid_strings WHERE id = ?",
@@ -3066,7 +3093,7 @@ def validate_first_anchor_window9_10_cp(
                     WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
                     LIMIT 1
                 """
-                df_pred = pd.read_sql_query(q, conn, params=[window_size, prefix, method, threshold])
+                df_pred = pd.read_sql_query(q, pred_conn, params=[window_size, prefix, method, threshold])
 
                 if len(df_pred) == 0:
                     total_skipped += 1
@@ -3693,6 +3720,7 @@ def validate_first_anchor_extended_window_v3_live_next_anchor_cp(
     method="빈도 기반",
     threshold=0,
     stop_on_match=False,
+    predictions_conn=None,
 ):
     """
     첫 앵커 확장 윈도우 V3 + 라이브 게임형 다음 앵커 선택 검증 함수
@@ -3709,6 +3737,7 @@ def validate_first_anchor_extended_window_v3_live_next_anchor_cp(
     Args/Returns: validate_first_anchor_extended_window_v3_cp 와 동일.
     """
     conn = get_change_point_db_connection()
+    pred_conn = predictions_conn if predictions_conn is not None else conn
     try:
         df = pd.read_sql_query(
             "SELECT grid_string FROM preprocessed_grid_strings WHERE id = ?",
@@ -3796,7 +3825,7 @@ def validate_first_anchor_extended_window_v3_live_next_anchor_cp(
                     WHERE window_size = ? AND prefix = ? AND method = ? AND threshold = ?
                     LIMIT 1
                 """
-                df_pred = pd.read_sql_query(q, conn, params=[window_size, prefix, method, threshold])
+                df_pred = pd.read_sql_query(q, pred_conn, params=[window_size, prefix, method, threshold])
 
                 if len(df_pred) == 0:
                     total_skipped += 1
@@ -3900,14 +3929,21 @@ def validate_first_anchor_extended_window_v3_live_next_anchor_cp(
         conn.close()
 
 
-def create_simulation_predictions_change_point_table():
+def create_simulation_predictions_change_point_table(conn=None):
     """
-    시뮬레이션 전용 예측 테이블 생성 (기존 DB 수정 없음)
+    시뮬레이션 전용 예측 테이블 생성.
+    
+    Args:
+        conn: DB 연결. None이면 change_point_ngram.db 사용.
+              격리 DB 사용 시 get_simulation_predictions_db_connection() 전달.
     
     Returns:
         bool: 테이블 생성 성공 여부
     """
-    conn = get_change_point_db_connection()
+    own_conn = False
+    if conn is None:
+        conn = get_change_point_db_connection()
+        own_conn = True
     cursor = conn.cursor()
     try:
         # 기존 테이블이 있으면 삭제하고 재생성 (시뮬레이션마다 새로 생성)
@@ -3940,7 +3976,8 @@ def create_simulation_predictions_change_point_table():
         conn.rollback()
         raise e
     finally:
-        conn.close()
+        if own_conn and conn is not None:
+            conn.close()
 
 
 def save_predictions_to_simulation_table(
@@ -3950,6 +3987,7 @@ def save_predictions_to_simulation_table(
     thresholds=(0,),
     batch_size=1000,
     min_sample_count=15,
+    predictions_conn=None,
 ):
     """
     시뮬레이션 전용 테이블에 예측값 저장
@@ -3964,6 +4002,8 @@ def save_predictions_to_simulation_table(
         thresholds: 임계값 목록
         batch_size: 배치 크기
         min_sample_count: 최소 표본 수 필터
+        predictions_conn: 예측 저장용 DB 연결. None이면 change_point_ngram.db 사용.
+                         격리 DB 사용 시 get_simulation_predictions_db_connection() 전달.
         
     Returns:
         dict: 저장 결과 통계
@@ -3977,7 +4017,9 @@ def save_predictions_to_simulation_table(
         predict_confidence_threshold,
     )
     
-    conn = get_change_point_db_connection()
+    main_conn = get_change_point_db_connection()
+    pred_conn = predictions_conn if predictions_conn is not None else main_conn
+    own_pred_conn = predictions_conn is not None
     try:
         if cutoff_grid_string_id is None:
             q = "SELECT id FROM preprocessed_grid_strings ORDER BY id"
@@ -3985,7 +4027,7 @@ def save_predictions_to_simulation_table(
         else:
             q = "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id"
             params = [cutoff_grid_string_id]
-        df_hist = pd.read_sql_query(q, conn, params=params)
+        df_hist = pd.read_sql_query(q, main_conn, params=params)
         if len(df_hist) == 0:
             return {"total_saved": 0, "new_records": 0, "updated_records": 0, "unique_prefixes": 0}
 
@@ -3994,7 +4036,7 @@ def save_predictions_to_simulation_table(
         new_records = 0
         updated_records = 0
         unique_prefixes_set = set()
-        cursor = conn.cursor()
+        cursor = pred_conn.cursor()
 
         for window_size in window_sizes:
             train_ngrams = load_ngram_chunks_change_point(window_size=window_size, grid_string_ids=historical_ids)
@@ -4063,7 +4105,7 @@ def save_predictions_to_simulation_table(
                         except Exception:
                             continue
 
-        conn.commit()
+        pred_conn.commit()
         return {
             "total_saved": total_saved,
             "new_records": new_records,
@@ -4071,10 +4113,10 @@ def save_predictions_to_simulation_table(
             "unique_prefixes": len(unique_prefixes_set),
         }
     except Exception:
-        conn.rollback()
+        pred_conn.rollback()
         raise
     finally:
-        conn.close()
+        main_conn.close()
 
 
 def generate_simulation_predictions_table(
@@ -4083,6 +4125,8 @@ def generate_simulation_predictions_table(
     method="빈도 기반",
     threshold=0,
     min_sample_count=15,
+    methods=None,
+    use_isolated_sim_db=False,
 ):
     """
     시뮬레이션 전용 예측 테이블 생성 및 예측값 저장 (별도 실행)
@@ -4094,35 +4138,38 @@ def generate_simulation_predictions_table(
     Args:
         cutoff_grid_string_id: cutoff ID (이 ID 이전 = 학습 데이터)
         window_sizes: 윈도우 크기 목록 (기본값: 9, 10, 11, 12, 13, 14)
-        method: 예측 방법
+        method: 예측 방법 (methods가 None일 때 사용)
         threshold: 임계값 (예측값 생성 시 사용)
         min_sample_count: 최소 표본 수 필터
+        methods: 저장할 예측 방법 목록. None이면 (method,) 사용.
+                 예: ("빈도 기반", "가중치 기반") 으로 두 방법 모두 저장 가능.
+        use_isolated_sim_db: True이면 simulation_predictions.db 사용 (다른 앱에 영향 없음).
+                            점진적 검증 시뮬레이션에서 사용.
         
     Returns:
         dict: 저장 결과 통계
     """
-    # 시뮬레이션 전용 테이블 생성
+    if methods is None:
+        methods = (method,)
+    pred_conn = get_simulation_predictions_db_connection() if use_isolated_sim_db else None
     try:
-        create_simulation_predictions_change_point_table()
-    except Exception as e:
-        import warnings
-        warnings.warn(f"시뮬레이션 테이블 생성 실패: {e}")
-        raise
-    
-    # cutoff 이전 데이터로 예측값 생성하여 시뮬레이션 테이블에 저장
-    try:
+        create_simulation_predictions_change_point_table(conn=pred_conn)
         pred_result = save_predictions_to_simulation_table(
             cutoff_grid_string_id=cutoff_grid_string_id,
             window_sizes=window_sizes,
-            methods=(method,),
+            methods=methods,
             thresholds=(threshold,),
             min_sample_count=min_sample_count,
+            predictions_conn=pred_conn,
         )
         return pred_result
     except Exception as e:
         import warnings
         warnings.warn(f"예측값 생성 실패: {e}")
         raise
+    finally:
+        if pred_conn is not None:
+            pred_conn.close()
 
 
 def batch_validate_first_anchor_extended_window_v3_cp(

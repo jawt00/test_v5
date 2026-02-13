@@ -327,6 +327,7 @@ def main():
                                 window_sizes=tuple(ws),
                                 method=method_sim,
                                 threshold=thresh_sim,
+                                methods=("빈도 기반", "가중치 기반"),
                             )
                             st.success(f"✅ 예측값 테이블 생성 완료! (저장된 레코드: {result.get('total_saved', 0):,}개)")
                             st.session_state["v3_predictions_generated"] = True
@@ -381,6 +382,7 @@ def main():
                                 window_sizes=tuple(ws),
                                 method=method_sim,
                                 threshold=thresh_sim,
+                                methods=("빈도 기반", "가중치 기반"),
                             )
                             st.success(f"✅ 예측값 테이블 생성 완료! (저장된 레코드: {result.get('total_saved', 0):,}개)")
                             st.session_state["v3_predictions_generated"] = True
@@ -422,6 +424,7 @@ def main():
                                 window_sizes=(9, 10, 11, 12, 13, 14),
                                 method=method_sim,
                                 threshold=thresh_sim,
+                                methods=("빈도 기반", "가중치 기반"),
                             )
                             st.success(f"✅ 예측값 테이블 생성 완료! (저장된 레코드: {result.get('total_saved', 0):,}개)")
                             st.session_state["window9_predictions_generated"] = True
@@ -464,6 +467,7 @@ def main():
                                 window_sizes=(9, 10, 11, 12, 13, 14),
                                 method=method_sim,
                                 threshold=thresh_sim,
+                                methods=("빈도 기반", "가중치 기반"),
                             )
                             st.success(f"✅ 예측값 테이블 생성 완료! (저장된 레코드: {result.get('total_saved', 0):,}개)")
                             st.session_state["window9_10_predictions_generated"] = True

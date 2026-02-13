@@ -97,12 +97,75 @@ def get_grid_string_by_id(grid_string_id):
         conn.close()
 
 
+def query_prediction_table_confidence_stats(window_sizes=(9, 10, 11)):
+    """
+    simulation_predictions_change_point 테이블에서
+    지정 윈도우·모든 method별 신뢰도 요약 조회.
+    """
+    conn = get_change_point_db_connection()
+    try:
+        placeholders = ",".join("?" * len(window_sizes))
+        q = f"""
+            SELECT
+                method AS method,
+                window_size AS window_size,
+                COUNT(*) AS record_count,
+                AVG(confidence) AS avg_confidence,
+                MIN(confidence) AS min_confidence,
+                MAX(confidence) AS max_confidence
+            FROM simulation_predictions_change_point
+            WHERE window_size IN ({placeholders})
+            GROUP BY method, window_size
+            ORDER BY method, window_size
+        """
+        df = pd.read_sql_query(q, conn, params=list(window_sizes))
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+
+def query_prediction_table_prefix_detail(window_sizes=(9, 10, 11)):
+    """
+    simulation_predictions_change_point 테이블에서
+    모든 prefix별 신뢰도 상세 조회.
+    """
+    conn = get_change_point_db_connection()
+    try:
+        placeholders = ",".join("?" * len(window_sizes))
+        q = f"""
+            SELECT
+                window_size,
+                prefix,
+                method,
+                threshold,
+                predicted_value,
+                confidence,
+                b_ratio,
+                p_ratio
+            FROM simulation_predictions_change_point
+            WHERE window_size IN ({placeholders})
+            ORDER BY window_size, prefix, method
+        """
+        df = pd.read_sql_query(q, conn, params=list(window_sizes))
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+
 def main():
     st.title("시뮬레이션 / 라이브 결과 조회")
     st.markdown("통계, 연속 불일치 높은 결과 파악, 상세 히스토리 조회")
     st.markdown("---")
 
-    t1, t2, t3 = st.tabs(["연속 불일치 높은 결과", "통계 대시보드", "상세 조회"])
+    t1, t2, t3 = st.tabs([
+        "연속 불일치 높은 결과",
+        "통계 대시보드",
+        "상세 조회",
+    ])
 
     with t1:
         _render_high_failure_tab()
@@ -110,6 +173,10 @@ def main():
         _render_stats_tab()
     with t3:
         _render_detail_tab()
+
+    st.markdown("---")
+    st.markdown("## 예측 테이블 신뢰도")
+    _render_prediction_table_confidence_section()
 
 
 def _render_high_failure_tab():
@@ -432,6 +499,127 @@ def _render_detail_tab():
             if events:
                 rows = build_history_table_rows(events, is_live=False)
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def _render_prediction_table_confidence_section():
+    """예측 테이블(simulation_predictions_change_point) 신뢰도 섹션. 하단 탭으로 요약/prefix별 상세."""
+    window_sizes = (9, 10, 11)
+    st.caption("simulation_predictions_change_point · 윈도우 9, 10, 11 · 모든 메소드")
+
+    sub_t1, sub_t2, sub_t3 = st.tabs(["요약", "prefix별 메소드 비교", "prefix별 상세(원본)"])
+
+    with sub_t1:
+        _render_prediction_confidence_summary(window_sizes)
+
+    with sub_t2:
+        _render_prediction_prefix_method_comparison(window_sizes)
+
+    with sub_t3:
+        _render_prediction_prefix_detail(window_sizes)
+
+
+def _render_prediction_confidence_summary(window_sizes):
+    """메소드·윈도우별 신뢰도 요약 테이블."""
+    df = query_prediction_table_confidence_stats(window_sizes=window_sizes)
+
+    if df is None or len(df) == 0:
+        st.info("예측 테이블에 데이터가 없거나 조회 결과가 없습니다. (윈도우 9, 10, 11 · 모든 method)")
+        return
+
+    display_df = pd.DataFrame({
+        "메소드": df["method"],
+        "윈도우 크기": df["window_size"],
+        "레코드 수": df["record_count"].astype(int),
+        "평균 신뢰도 (%)": (df["avg_confidence"].round(2)),
+        "최소 신뢰도 (%)": (df["min_confidence"].round(2)),
+        "최대 신뢰도 (%)": (df["max_confidence"].round(2)),
+    })
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    st.caption(f"총 {len(display_df)}개 (메소드×윈도우) 조합 · 윈도우: {window_sizes}")
+
+
+def _build_prefix_method_comparison_df(df_raw, window_sizes):
+    """
+    같은 prefix에 대해 메소드별 예측값·신뢰도를 나란히 보여주는 피벗 테이블 생성.
+    threshold=0 기준 (라이브 앱과 동일).
+    """
+    if df_raw is None or len(df_raw) == 0:
+        return pd.DataFrame()
+    df = df_raw[df_raw["threshold"] == 0].copy()
+    if len(df) == 0:
+        return pd.DataFrame()
+    df["confidence"] = df["confidence"].round(2)
+    methods = df["method"].unique().tolist()
+    method_order = ["빈도 기반", "가중치 기반", "안전 우선"]
+    methods = [m for m in method_order if m in methods] or methods
+    rows = []
+    for (ws, prefix), grp in df.groupby(["window_size", "prefix"]):
+        row = {"윈도우": ws, "prefix": prefix}
+        for m in methods:
+            sub = grp[grp["method"] == m]
+            if len(sub) > 0:
+                r = sub.iloc[0]
+                row[f"{m}_예측"] = r["predicted_value"] if pd.notna(r["predicted_value"]) and r["predicted_value"] else "-"
+                row[f"{m}_신뢰도(%)"] = r["confidence"] if pd.notna(r["confidence"]) else "-"
+            else:
+                row[f"{m}_예측"] = "-"
+                row[f"{m}_신뢰도(%)"] = "-"
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _render_prediction_prefix_method_comparison(window_sizes):
+    """같은 prefix에 대해 메소드별 예측값·신뢰도 차이 비교 테이블. 윈도우 크기별 필터 지원."""
+    df = query_prediction_table_prefix_detail(window_sizes=window_sizes)
+    display_df = _build_prefix_method_comparison_df(df, window_sizes)
+
+    if display_df is None or len(display_df) == 0:
+        st.info("예측 테이블에 데이터가 없습니다. (threshold=0 기준)")
+        return
+
+    # 윈도우 크기별 필터
+    ws_options = ["전체"] + [int(x) for x in sorted(display_df["윈도우"].unique())]
+    selected_ws = st.selectbox(
+        "윈도우 크기",
+        range(len(ws_options)),
+        format_func=lambda i: "전체" if ws_options[i] == "전체" else f"{ws_options[i]}",
+        key="prefix_method_ws_filter",
+    )
+    ws_value = ws_options[selected_ws]
+
+    if ws_value != "전체":
+        display_df = display_df[display_df["윈도우"] == ws_value].copy()
+        # 윈도우 컬럼은 동일값이므로 숨겨도 됨 (선택 시 제거하면 테이블 간결)
+        display_df = display_df.drop(columns=["윈도우"])
+
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    caption_ws = f"윈도우 {ws_value}" if ws_value != "전체" else f"윈도우: {window_sizes}"
+    st.caption(
+        f"총 {len(display_df):,}개 prefix · {caption_ws} · "
+        "같은 행에서 메소드별 예측값·신뢰도 차이 비교"
+    )
+
+
+def _render_prediction_prefix_detail(window_sizes):
+    """모든 prefix별 신뢰도 상세 테이블 (원본 행 구조)."""
+    df = query_prediction_table_prefix_detail(window_sizes=window_sizes)
+
+    if df is None or len(df) == 0:
+        st.info("예측 테이블에 데이터가 없습니다.")
+        return
+
+    display_df = pd.DataFrame({
+        "윈도우": df["window_size"],
+        "prefix": df["prefix"],
+        "메소드": df["method"],
+        "임계값": df["threshold"],
+        "예측값": df["predicted_value"],
+        "신뢰도 (%)": (df["confidence"].round(2)),
+        "B 비율 (%)": (df["b_ratio"].round(2)),
+        "P 비율 (%)": (df["p_ratio"].round(2)),
+    })
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+    st.caption(f"총 {len(display_df):,}개 레코드 · 윈도우: {window_sizes}")
 
 
 if __name__ == "__main__":

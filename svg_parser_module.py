@@ -328,6 +328,23 @@ def generate_and_save_ngram_chunks(grid_string_id, grid_string, window_sizes=[5,
 
 # Change-point Detection용 DB 경로
 CHANGE_POINT_DB_PATH = os.path.join('change_point', 'change_point_ngram.db')
+# 점진적 검증 시뮬레이션용 격리 DB (다른 앱에 영향 없음)
+SIMULATION_PREDICTIONS_DB_PATH = os.path.join('change_point', 'simulation_predictions.db')
+
+
+def get_simulation_predictions_db_connection():
+    """점진적 검증 시뮬레이션 전용 예측 DB 연결. change_point_ngram.db와 분리되어 다른 앱에 영향 없음."""
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), SIMULATION_PREDICTIONS_DB_PATH)
+    try:
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+        conn = sqlite3.connect(db_path, timeout=20.0, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        return conn
+    except Exception as e:
+        raise Exception(f"시뮬레이션 예측 DB 연결 실패: {str(e)} (경로: {db_path})")
+
 
 def get_change_point_db_connection():
     """Change-point Detection용 데이터베이스 연결 (타임아웃 설정으로 락 방지)"""

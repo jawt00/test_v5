@@ -24,15 +24,16 @@ from change_point.incremental_validation_utils import (
     get_validation_ids_for_date,
 )
 from svg_parser_module import get_change_point_db_connection
-from change_point_prediction_module import load_preprocessed_grid_strings_cp
 from change_point.change_point_hypothesis_module import (
     get_hypothesis,
+    get_simulation_predictions_db_connection,
     generate_simulation_predictions_table,
     validate_first_anchor_extended_window_v3_cp,
     validate_first_anchor_extended_window_v3_live_next_anchor_cp,
     validate_first_anchor_window9_only_cp,
     validate_first_anchor_window9_10_cp,
 )
+from change_point_prediction_module import load_preprocessed_grid_strings_cp
 
 st.set_page_config(
     page_title="점진적 윈도우 검증 시뮬레이션",
@@ -161,30 +162,37 @@ def run_incremental_validation_both(
                 window_sizes=WINDOW_SIZES,
                 method=method,
                 threshold=threshold,
+                use_isolated_sim_db=True,
             )
         except Exception as e:
             if progress_callback:
                 progress_callback(-1, len(dates), validation_date, error=str(e))
             continue
 
-        results_v3 = []
-        results_w910 = []
-        for gid in validation_ids:
-            rv = validate_first_anchor_extended_window_v3_cp(
-                gid, train_cutoff_id,
-                window_sizes=WINDOW_SIZES,
-                method=method,
-                threshold=threshold,
-            )
-            rw = validate_first_anchor_window9_10_cp(
-                gid, train_cutoff_id,
-                method=method,
-                threshold=threshold,
-            )
-            if rv is not None:
-                results_v3.append(rv)
-            if rw is not None:
-                results_w910.append(rw)
+        pred_conn = get_simulation_predictions_db_connection()
+        try:
+            results_v3 = []
+            results_w910 = []
+            for gid in validation_ids:
+                rv = validate_first_anchor_extended_window_v3_cp(
+                    gid, train_cutoff_id,
+                    window_sizes=WINDOW_SIZES,
+                    method=method,
+                    threshold=threshold,
+                    predictions_conn=pred_conn,
+                )
+                rw = validate_first_anchor_window9_10_cp(
+                    gid, train_cutoff_id,
+                    method=method,
+                    threshold=threshold,
+                    predictions_conn=pred_conn,
+                )
+                if rv is not None:
+                    results_v3.append(rv)
+                if rw is not None:
+                    results_w910.append(rw)
+        finally:
+            pred_conn.close()
 
         agg_v3 = _aggregate_day(results_v3)
         agg_w910 = _aggregate_day(results_w910)
@@ -272,6 +280,7 @@ def _run_separated_validation(initial_cutoff, range_ends, hyp_name, method, thre
                     window_sizes=tuple(ws),
                     method=method,
                     threshold=threshold,
+                    use_isolated_sim_db=True,
                 )
             except Exception as e:
                 range_results.append({
@@ -286,24 +295,36 @@ def _run_separated_validation(initial_cutoff, range_ends, hyp_name, method, thre
             if progress_placeholder:
                 progress_placeholder.progress((i + 0.6) / len(range_ends))
             validation_ids = _get_validation_ids_in_range(conn, train_cutoff, end_id)
+            pred_conn = get_simulation_predictions_db_connection()
             results = []
-            for gid in validation_ids:
-                if hyp_name == "first_anchor_extended_window_v3":
-                    r = validate_first_anchor_extended_window_v3_cp(
-                        gid, train_cutoff, window_sizes=tuple(ws), method=method, threshold=threshold
-                    )
-                elif hyp_name == "first_anchor_extended_window_v3_live_next_anchor":
-                    r = validate_first_anchor_extended_window_v3_live_next_anchor_cp(
-                        gid, train_cutoff, window_sizes=tuple(ws), method=method, threshold=threshold
-                    )
-                elif hyp_name == "first_anchor_window9_only":
-                    r = validate_first_anchor_window9_only_cp(gid, train_cutoff, method=method, threshold=threshold)
-                elif hyp_name == "first_anchor_window9_10":
-                    r = validate_first_anchor_window9_10_cp(gid, train_cutoff, method=method, threshold=threshold)
-                else:
-                    r = None
-                if r is not None:
-                    results.append(r)
+            try:
+                for gid in validation_ids:
+                    if hyp_name == "first_anchor_extended_window_v3":
+                        r = validate_first_anchor_extended_window_v3_cp(
+                            gid, train_cutoff, window_sizes=tuple(ws), method=method, threshold=threshold,
+                            predictions_conn=pred_conn,
+                        )
+                    elif hyp_name == "first_anchor_extended_window_v3_live_next_anchor":
+                        r = validate_first_anchor_extended_window_v3_live_next_anchor_cp(
+                            gid, train_cutoff, window_sizes=tuple(ws), method=method, threshold=threshold,
+                            predictions_conn=pred_conn,
+                        )
+                    elif hyp_name == "first_anchor_window9_only":
+                        r = validate_first_anchor_window9_only_cp(
+                            gid, train_cutoff, method=method, threshold=threshold,
+                            predictions_conn=pred_conn,
+                        )
+                    elif hyp_name == "first_anchor_window9_10":
+                        r = validate_first_anchor_window9_10_cp(
+                            gid, train_cutoff, method=method, threshold=threshold,
+                            predictions_conn=pred_conn,
+                        )
+                    else:
+                        r = None
+                    if r is not None:
+                        results.append(r)
+            finally:
+                pred_conn.close()
             if progress_placeholder:
                 progress_placeholder.progress((i + 1) / len(range_ends))
             if not results:

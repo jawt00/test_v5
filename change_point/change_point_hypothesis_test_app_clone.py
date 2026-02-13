@@ -777,7 +777,8 @@ def main():
                 
                 # 결과 저장 (수동): V3 단일 테스트이고 상세 히스토리가 있을 때만
                 run_params = st.session_state.get("test_run_params")
-                if run_params and run_params.get("hypothesis_key") == "first_anchor_extended_window_v3":
+                saveable_hypotheses = ("first_anchor_extended_window_v3", "first_anchor_window9_10")
+                if run_params and run_params.get("hypothesis_key") in saveable_hypotheses:
                     if st.button("결과 저장", key="save_results_btn", type="secondary", use_container_width=True):
                         try:
                             run_id = save_run_results(

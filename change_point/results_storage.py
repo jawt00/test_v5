@@ -103,8 +103,28 @@ def init_results_schema(conn):
     conn.commit()
 
 
+def _live_run_summary_has_mode(conn):
+    """live_run_summary 테이블에 mode 컬럼 존재 여부."""
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='live_run_summary'")
+    if cur.fetchone() is None:
+        return False
+    cur.execute("PRAGMA table_info(live_run_summary)")
+    return any(row[1] == "mode" for row in cur.fetchall())
+
+
+def _live_step_events_has_mode(conn):
+    """live_step_events 테이블에 mode 컬럼 존재 여부."""
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='live_step_events'")
+    if cur.fetchone() is None:
+        return False
+    cur.execute("PRAGMA table_info(live_step_events)")
+    return any(row[1] == "mode" for row in cur.fetchall())
+
+
 def init_live_results_schema(conn):
-    """라이브게임 결과 테이블: live_runs, live_run_summary, live_step_events (시뮬레이션과 동일 DB, 별도 테이블)."""
+    """라이브게임 결과 테이블: live_runs, live_run_summary(mode 포함), live_step_events(mode 포함). 기존 테이블은 mode 컬럼 없으면 마이그레이션."""
     cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS live_runs (
@@ -115,40 +135,143 @@ def init_live_results_schema(conn):
             threshold REAL NOT NULL,
             window_sizes TEXT NOT NULL,
             grid_string TEXT NOT NULL,
-            notes TEXT
+            notes TEXT,
+            modes TEXT
         )
     """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS live_run_summary (
-            run_id TEXT PRIMARY KEY,
-            total_steps INTEGER NOT NULL,
-            total_failures INTEGER NOT NULL,
-            total_predictions INTEGER NOT NULL,
-            total_skipped INTEGER NOT NULL,
-            accuracy REAL NOT NULL,
-            max_consecutive_failures INTEGER NOT NULL,
-            FOREIGN KEY (run_id) REFERENCES live_runs(run_id)
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS live_step_events (
-            run_id TEXT NOT NULL,
-            step INTEGER NOT NULL,
-            position INTEGER NOT NULL,
-            anchor INTEGER NOT NULL,
-            window_size INTEGER NOT NULL,
-            prefix TEXT NOT NULL,
-            predicted TEXT,
-            actual TEXT,
-            is_correct INTEGER,
-            confidence REAL NOT NULL,
-            skipped INTEGER NOT NULL,
-            skip_reason TEXT,
-            PRIMARY KEY (run_id, step),
-            FOREIGN KEY (run_id) REFERENCES live_runs(run_id)
-        )
-    """)
+    # live_runs에 modes 컬럼 없으면 추가 (기존 DB)
+    cur.execute("PRAGMA table_info(live_runs)")
+    if not any(row[1] == "modes" for row in cur.fetchall()):
+        try:
+            cur.execute("ALTER TABLE live_runs ADD COLUMN modes TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+    if not _live_run_summary_has_mode(conn):
+        # 기존 live_run_summary가 있으면 mode 컬럼 추가 마이그레이션
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='live_run_summary'")
+        if cur.fetchone() is not None:
+            cur.execute("""
+                CREATE TABLE live_run_summary_new (
+                    run_id TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'v3',
+                    total_steps INTEGER NOT NULL,
+                    total_failures INTEGER NOT NULL,
+                    total_predictions INTEGER NOT NULL,
+                    total_skipped INTEGER NOT NULL,
+                    accuracy REAL NOT NULL,
+                    max_consecutive_failures INTEGER NOT NULL,
+                    PRIMARY KEY (run_id, mode),
+                    FOREIGN KEY (run_id) REFERENCES live_runs(run_id)
+                )
+            """)
+            cur.execute("""
+                INSERT INTO live_run_summary_new (run_id, mode, total_steps, total_failures, total_predictions, total_skipped, accuracy, max_consecutive_failures)
+                SELECT run_id, 'v3', total_steps, total_failures, total_predictions, total_skipped, accuracy, max_consecutive_failures FROM live_run_summary
+            """)
+            cur.execute("DROP TABLE live_run_summary")
+            cur.execute("ALTER TABLE live_run_summary_new RENAME TO live_run_summary")
+        else:
+            cur.execute("""
+                CREATE TABLE live_run_summary (
+                    run_id TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'v3',
+                    total_steps INTEGER NOT NULL,
+                    total_failures INTEGER NOT NULL,
+                    total_predictions INTEGER NOT NULL,
+                    total_skipped INTEGER NOT NULL,
+                    accuracy REAL NOT NULL,
+                    max_consecutive_failures INTEGER NOT NULL,
+                    PRIMARY KEY (run_id, mode),
+                    FOREIGN KEY (run_id) REFERENCES live_runs(run_id)
+                )
+            """)
+    else:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS live_run_summary (
+                run_id TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'v3',
+                total_steps INTEGER NOT NULL,
+                total_failures INTEGER NOT NULL,
+                total_predictions INTEGER NOT NULL,
+                total_skipped INTEGER NOT NULL,
+                accuracy REAL NOT NULL,
+                max_consecutive_failures INTEGER NOT NULL,
+                PRIMARY KEY (run_id, mode),
+                FOREIGN KEY (run_id) REFERENCES live_runs(run_id)
+            )
+        """)
+
+    if not _live_step_events_has_mode(conn):
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='live_step_events'")
+        if cur.fetchone() is not None:
+            cur.execute("""
+                CREATE TABLE live_step_events_new (
+                    run_id TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'v3',
+                    step INTEGER NOT NULL,
+                    position INTEGER NOT NULL,
+                    anchor INTEGER NOT NULL,
+                    window_size INTEGER NOT NULL,
+                    prefix TEXT NOT NULL,
+                    predicted TEXT,
+                    actual TEXT,
+                    is_correct INTEGER,
+                    confidence REAL NOT NULL,
+                    skipped INTEGER NOT NULL,
+                    skip_reason TEXT,
+                    PRIMARY KEY (run_id, mode, step),
+                    FOREIGN KEY (run_id) REFERENCES live_runs(run_id)
+                )
+            """)
+            cur.execute("""
+                INSERT INTO live_step_events_new (run_id, mode, step, position, anchor, window_size, prefix, predicted, actual, is_correct, confidence, skipped, skip_reason)
+                SELECT run_id, 'v3', step, position, anchor, window_size, prefix, predicted, actual, is_correct, confidence, skipped, skip_reason FROM live_step_events
+            """)
+            cur.execute("DROP TABLE live_step_events")
+            cur.execute("ALTER TABLE live_step_events_new RENAME TO live_step_events")
+        else:
+            cur.execute("""
+                CREATE TABLE live_step_events (
+                    run_id TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'v3',
+                    step INTEGER NOT NULL,
+                    position INTEGER NOT NULL,
+                    anchor INTEGER NOT NULL,
+                    window_size INTEGER NOT NULL,
+                    prefix TEXT NOT NULL,
+                    predicted TEXT,
+                    actual TEXT,
+                    is_correct INTEGER,
+                    confidence REAL NOT NULL,
+                    skipped INTEGER NOT NULL,
+                    skip_reason TEXT,
+                    PRIMARY KEY (run_id, mode, step),
+                    FOREIGN KEY (run_id) REFERENCES live_runs(run_id)
+                )
+            """)
+    else:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS live_step_events (
+                run_id TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'v3',
+                step INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                anchor INTEGER NOT NULL,
+                window_size INTEGER NOT NULL,
+                prefix TEXT NOT NULL,
+                predicted TEXT,
+                actual TEXT,
+                is_correct INTEGER,
+                confidence REAL NOT NULL,
+                skipped INTEGER NOT NULL,
+                skip_reason TEXT,
+                PRIMARY KEY (run_id, mode, step),
+                FOREIGN KEY (run_id) REFERENCES live_runs(run_id)
+            )
+        """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_live_step_events_run_id ON live_step_events(run_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_live_step_events_run_mode ON live_step_events(run_id, mode)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_live_step_events_run_anchor ON live_step_events(run_id, anchor)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_live_step_events_run_window ON live_step_events(run_id, window_size)")
     conn.commit()
@@ -300,11 +423,14 @@ def _summary_from_live_history(history):
 
 
 def insert_live_run(conn, run_meta):
-    """live_runs 테이블에 1행 삽입."""
+    """live_runs 테이블에 1행 삽입. run_meta에 modes (list) 있으면 JSON 문자열로 저장."""
+    modes = run_meta.get("modes")
+    if isinstance(modes, (list, tuple)):
+        modes = json.dumps(list(modes))
     conn.execute(
         """
-        INSERT INTO live_runs (run_id, created_at, engine_version, method, threshold, window_sizes, grid_string, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO live_runs (run_id, created_at, engine_version, method, threshold, window_sizes, grid_string, notes, modes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_meta["run_id"],
@@ -315,19 +441,21 @@ def insert_live_run(conn, run_meta):
             run_meta["window_sizes"],
             run_meta["grid_string"],
             run_meta.get("notes"),
+            modes,
         ),
     )
 
 
-def insert_live_run_summary(conn, run_id, summary):
-    """live_run_summary 테이블에 1행 삽입."""
+def insert_live_run_summary(conn, run_id, summary, mode="v3"):
+    """live_run_summary 테이블에 1행 삽입 (run_id, mode별)."""
     conn.execute(
         """
-        INSERT INTO live_run_summary (run_id, total_steps, total_failures, total_predictions, total_skipped, accuracy, max_consecutive_failures)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO live_run_summary (run_id, mode, total_steps, total_failures, total_predictions, total_skipped, accuracy, max_consecutive_failures)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
+            mode,
             summary.get("total_steps", 0),
             summary.get("total_failures", 0),
             summary.get("total_predictions", 0),
@@ -338,8 +466,8 @@ def insert_live_run_summary(conn, run_id, summary):
     )
 
 
-def insert_live_step_events(conn, run_id, history):
-    """라이브게임 히스토리를 live_step_events에 전부 삽입."""
+def insert_live_step_events(conn, run_id, history, mode="v3"):
+    """라이브게임 히스토리를 live_step_events에 전부 삽입 (run_id, mode별)."""
     for entry in history or []:
         is_correct = entry.get("is_correct")
         if is_correct is True:
@@ -350,11 +478,12 @@ def insert_live_step_events(conn, run_id, history):
             is_correct_int = None
         conn.execute(
             """
-            INSERT INTO live_step_events (run_id, step, position, anchor, window_size, prefix, predicted, actual, is_correct, confidence, skipped, skip_reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO live_step_events (run_id, mode, step, position, anchor, window_size, prefix, predicted, actual, is_correct, confidence, skipped, skip_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
+                mode,
                 entry.get("step", 0),
                 entry.get("position", 0),
                 entry.get("anchor", 0),
@@ -370,12 +499,12 @@ def insert_live_step_events(conn, run_id, history):
         )
 
 
-def save_live_run_results(run_meta, history, summary, db_path=None):
+def save_live_run_results(run_meta, history=None, summary=None, db_path=None, history_by_mode=None, summary_by_mode=None):
     """
     라이브게임 run 1회 분량을 한 트랜잭션으로 저장 (live_runs, live_run_summary, live_step_events).
-    - run_meta: method, threshold, window_sizes (list 또는 JSON 문자열), grid_string, notes. run_id, created_at 없으면 자동 생성.
-    - history: step 단위 리스트 (step, position, anchor, window_size, prefix, predicted, actual, is_correct, confidence, skipped, skip_reason)
-    - summary: total_steps, total_failures, total_predictions, total_skipped, accuracy. max_consecutive_failures 없으면 history에서 계산.
+    - run_meta: method, threshold, window_sizes (list 또는 JSON 문자열), grid_string, notes, modes(선택). run_id, created_at 없으면 자동 생성.
+    - 다중 모드: history_by_mode, summary_by_mode 제공 시 모드별로 저장 (run_meta.modes 사용 또는 history_by_mode 키 목록).
+    - 단일 모드(기존 호환): history, summary 제공 시 mode='v3'로 1건 저장.
 
     Returns:
         str: run_id
@@ -385,6 +514,14 @@ def save_live_run_results(run_meta, history, summary, db_path=None):
     window_sizes = run_meta.get("window_sizes")
     if isinstance(window_sizes, (list, tuple)):
         window_sizes = json.dumps(list(window_sizes))
+    modes_list = run_meta.get("modes")
+    if isinstance(modes_list, (list, tuple)):
+        modes_list = list(modes_list)
+    elif history_by_mode:
+        modes_list = list(history_by_mode.keys())
+    else:
+        modes_list = None
+
     meta = {
         "run_id": run_id,
         "created_at": created_at,
@@ -394,16 +531,25 @@ def save_live_run_results(run_meta, history, summary, db_path=None):
         "window_sizes": window_sizes,
         "grid_string": run_meta.get("grid_string", ""),
         "notes": run_meta.get("notes"),
+        "modes": modes_list,
     }
-    # 저장 시점에 history 기준으로 요약 재계산 (Cold Start 이후 B/P 입력 반영)
-    summary = _summary_from_live_history(history)
     conn = get_results_db_connection(db_path)
     try:
         init_live_results_schema(conn)
         conn.execute("BEGIN")
         insert_live_run(conn, meta)
-        insert_live_run_summary(conn, run_id, summary)
-        insert_live_step_events(conn, run_id, history)
+        if history_by_mode is not None and summary_by_mode is not None:
+            for mode in (modes_list or list(history_by_mode.keys())):
+                h = history_by_mode.get(mode) or []
+                s = summary_by_mode.get(mode) or _summary_from_live_history(h)
+                insert_live_run_summary(conn, run_id, s, mode=mode)
+                insert_live_step_events(conn, run_id, h, mode=mode)
+        else:
+            if history is None:
+                history = []
+            summary = summary or _summary_from_live_history(history)
+            insert_live_run_summary(conn, run_id, summary, mode="v3")
+            insert_live_step_events(conn, run_id, history, mode="v3")
         conn.commit()
         return run_id
     except Exception:
@@ -576,10 +722,11 @@ def query_simulation_run_detail(run_id, db_path=None):
 
 def query_live_run_detail(run_id, db_path=None):
     """
-    라이브 run 상세: run_meta, run_summary, step_events.
+    라이브 run 상세: run_meta, run_summary, run_summary_by_mode, step_events.
 
     Returns:
-        dict: {"run_meta", "run_summary", "step_events"} 또는 None
+        dict: {"run_meta", "run_summary", "run_summary_by_mode", "step_events"} 또는 None.
+        run_summary: 첫 번째 모드 요약(하위 호환). run_summary_by_mode: mode별 요약 dict.
     """
     conn = get_results_db_connection(db_path)
     try:
@@ -588,15 +735,20 @@ def query_live_run_detail(run_id, db_path=None):
         df_r = pd.read_sql_query("SELECT * FROM live_runs WHERE run_id = ?", conn, params=[run_id])
         df_s = pd.read_sql_query("SELECT * FROM live_run_summary WHERE run_id = ?", conn, params=[run_id])
         df_e = pd.read_sql_query(
-            "SELECT * FROM live_step_events WHERE run_id = ? ORDER BY step",
+            "SELECT * FROM live_step_events WHERE run_id = ? ORDER BY mode, step",
             conn,
             params=[run_id],
         )
         if len(df_r) == 0:
             return None
+        run_summary = df_s.iloc[0].to_dict() if len(df_s) > 0 else {}
+        run_summary_by_mode = {}
+        if len(df_s) > 0 and "mode" in df_s.columns:
+            run_summary_by_mode = {row["mode"]: row.to_dict() for _, row in df_s.iterrows()}
         return {
             "run_meta": df_r.iloc[0].to_dict(),
-            "run_summary": df_s.iloc[0].to_dict() if len(df_s) > 0 else {},
+            "run_summary": run_summary,
+            "run_summary_by_mode": run_summary_by_mode,
             "step_events": df_e.to_dict("records") if len(df_e) > 0 else [],
         }
     finally:

@@ -140,7 +140,9 @@ streamlit run change_point/change_point_v3_verification_test_app.py
 streamlit run change_point_live_game_app_flow_fixed.py
 
 streamlit run change_point_live_game_app_three_modes.py
+streamlit run change_point_live_game_app_three_modes_copy.py
 
+streamlit run change_point_incremental_validation_app.py
 
 
 cd c:\test_v5\change_point 
@@ -172,6 +174,9 @@ git push -u origin change_point-v2
 
 
 git reset --hard origin/change_point-v2
+
+source /Users/tj/test_v5/venv/bin/activate
+cd /Users/tj/test_v5/change_point
 
 윈도우 크기=10, 임계값=59.0%
 12 64 13%
@@ -205,3 +210,5 @@ git reset --hard origin/change_point-v2
 
 
 ppbbbpbpbbpbbbpbppbpppppbpbbppbppbb
+
+pbbbbppbbbbppbbpbbbbpbbbpbbbppbpbbbppbbpbppbpbppbppppbbbpbp

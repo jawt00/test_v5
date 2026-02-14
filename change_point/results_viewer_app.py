@@ -23,6 +23,7 @@ from results_storage import (
     query_simulation_stats,
     query_simulation_high_failure_results,
     query_simulation_hypothesis_keys,
+    query_step_events_prefix_win_rate,
     query_live_run_detail,
     query_live_runs_list,
     query_live_stats,
@@ -541,7 +542,7 @@ def _render_prediction_confidence_summary(window_sizes):
 def _build_prefix_method_comparison_df(df_raw, window_sizes):
     """
     같은 prefix에 대해 메소드별 예측값·신뢰도를 나란히 보여주는 피벗 테이블 생성.
-    threshold=0 기준 (라이브 앱과 동일).
+    threshold=0 기준 (라이브 앱과 동일). 시뮬레이션 승률(%) 컬럼 포함.
     """
     if df_raw is None or len(df_raw) == 0:
         return pd.DataFrame()
@@ -565,7 +566,25 @@ def _build_prefix_method_comparison_df(df_raw, window_sizes):
                 row[f"{m}_예측"] = "-"
                 row[f"{m}_신뢰도(%)"] = "-"
         rows.append(row)
-    return pd.DataFrame(rows)
+    display_df = pd.DataFrame(rows)
+    df_win = query_step_events_prefix_win_rate(window_sizes)
+    if len(df_win) > 0:
+        display_df = display_df.merge(
+            df_win[["window_size", "prefix", "win_rate_pct"]],
+            left_on=["윈도우", "prefix"],
+            right_on=["window_size", "prefix"],
+            how="left",
+        )
+        display_df["시뮬레이션 승률(%)"] = display_df["win_rate_pct"].apply(
+            lambda x: f"{x:.1f}" if pd.notna(x) else "-"
+        )
+        drop_cols = ["window_size", "win_rate_pct"]
+        if "prefix_y" in display_df.columns:
+            drop_cols.append("prefix_y")
+        display_df = display_df.drop(columns=drop_cols)
+    else:
+        display_df["시뮬레이션 승률(%)"] = "-"
+    return display_df
 
 
 def _render_prediction_prefix_method_comparison(window_sizes):
@@ -601,7 +620,7 @@ def _render_prediction_prefix_method_comparison(window_sizes):
 
 
 def _render_prediction_prefix_detail(window_sizes):
-    """모든 prefix별 신뢰도 상세 테이블 (원본 행 구조)."""
+    """모든 prefix별 신뢰도 상세 테이블 (원본 행 구조). 시뮬레이션 승률(%) 컬럼 포함."""
     df = query_prediction_table_prefix_detail(window_sizes=window_sizes)
 
     if df is None or len(df) == 0:
@@ -618,6 +637,23 @@ def _render_prediction_prefix_detail(window_sizes):
         "B 비율 (%)": (df["b_ratio"].round(2)),
         "P 비율 (%)": (df["p_ratio"].round(2)),
     })
+    df_win = query_step_events_prefix_win_rate(window_sizes)
+    if len(df_win) > 0:
+        display_df = display_df.merge(
+            df_win[["window_size", "prefix", "win_rate_pct"]],
+            left_on=["윈도우", "prefix"],
+            right_on=["window_size", "prefix"],
+            how="left",
+        )
+        display_df["시뮬레이션 승률(%)"] = display_df["win_rate_pct"].apply(
+            lambda x: f"{x:.1f}" if pd.notna(x) else "-"
+        )
+        drop_cols = ["window_size", "win_rate_pct"]
+        if "prefix_y" in display_df.columns:
+            drop_cols.append("prefix_y")
+        display_df = display_df.drop(columns=drop_cols)
+    else:
+        display_df["시뮬레이션 승률(%)"] = "-"
     st.dataframe(display_df, use_container_width=True, hide_index=True)
     st.caption(f"총 {len(display_df):,}개 레코드 · 윈도우: {window_sizes}")
 

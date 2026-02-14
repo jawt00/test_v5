@@ -832,6 +832,40 @@ class FirstAnchorWindow9And10Hypothesis(Hypothesis):
         return {}
 
 
+class FirstAnchorWindow9_10Agree55Hypothesis(Hypothesis):
+    """
+    윈도우 9·10 검증 (agree55): 앵커당 9→10만, 빈도/가중치 일치·빈도 신뢰도 ≥ 임계값,
+    조기 종료(윈도우 9 적중 시), 앵커 중첩 시 이전 앵커만 검증.
+    """
+    WINDOW_SIZES = (9, 10)
+
+    def __init__(self):
+        pass
+
+    def predict(self, grid_string, position, window_sizes, method, threshold, **kwargs):
+        """이 가설은 검증 함수에서 직접 simulation_predictions_change_point를 조회하므로 predict는 사용하지 않음."""
+        return {
+            "predicted": None,
+            "confidence": 0.0,
+            "window_size": None,
+            "prefix": None,
+            "all_predictions": [],
+            "skipped": True,
+        }
+
+    def get_name(self):
+        return "윈도우 9,10 (agree55)"
+
+    def get_description(self):
+        return (
+            "앵커당 윈도우 9·10만 검증. 빈도/가중치 예측값 일치·빈도 신뢰도 ≥ 임계값(기본 55%)일 때만 예측 사용; "
+            "윈도우 9 적중 시 조기 종료; 앵커 중첩 시 이전 앵커만 검증. validate_first_anchor_window9_10_agree55_cp 사용."
+        )
+
+    def get_config_schema(self):
+        return {}
+
+
 class ThresholdSkipAnchorPriorityHypothesis(Hypothesis):
     """임계점 스킵 + 앵커 우선순위 가설 - 임계점 미만 스킵, 앵커 중첩 시 이전 앵커 우선"""
     
@@ -1165,6 +1199,7 @@ register_hypothesis("first_anchor_extended_window_v3", FirstAnchorExtendedWindow
 register_hypothesis("first_anchor_extended_window_v3_live_next_anchor", FirstAnchorExtendedWindowHypothesisV3LiveNextAnchor)
 register_hypothesis("first_anchor_window9_only", FirstAnchorWindow9OnlyHypothesis)
 register_hypothesis("first_anchor_window9_10", FirstAnchorWindow9And10Hypothesis)
+register_hypothesis("first_anchor_window9_10_agree55", FirstAnchorWindow9_10Agree55Hypothesis)
 register_hypothesis("threshold_skip_anchor_priority", ThresholdSkipAnchorPriorityHypothesis)
 register_hypothesis("threshold_skip_anchor_priority_extended", ThresholdSkipAnchorPriorityExtendedHypothesis)
 
@@ -2174,6 +2209,16 @@ def batch_validate_multiple_train_ratios(
                 threshold=threshold,
                 stop_on_match=stop_on_match,
             )
+        elif hypothesis == "first_anchor_window9_10_agree55" or isinstance(hypothesis_instance, FirstAnchorWindow9_10Agree55Hypothesis):
+            thresh_freq = hypothesis_params.get("threshold_freq", threshold)
+            thresh_weight = hypothesis_params.get("threshold_weight", threshold)
+            res = batch_validate_first_anchor_window9_10_agree55_cp(
+                cutoff_grid_string_id,
+                threshold=0,
+                stop_on_match=stop_on_match,
+                min_confidence_freq=thresh_freq,
+                min_confidence_weight=thresh_weight,
+            )
         elif isinstance(hypothesis_instance, ThresholdSkipAnchorPriorityHypothesis) and not isinstance(hypothesis_instance, ThresholdSkipAnchorPriorityExtendedHypothesis):
             res = batch_validate_threshold_skip_anchor_priority_cp(
                 cutoff_grid_string_id,
@@ -3152,6 +3197,257 @@ def validate_first_anchor_window9_10_cp(
                 })
                 last_pos = pos
                 if ok:
+                    current_pos = pos + 1
+                    anchor_idx += 1
+                    anchor_matched = True
+                    break
+            else:
+                current_pos = (last_pos + 1) if last_pos is not None else (next_anchor + max(WINDOW_SIZES))
+                anchor_idx += 1
+
+            if stop_on_match and anchor_matched:
+                stopped_early = True
+                break
+
+        acc = ((total_predictions - total_failures) / total_predictions * 100) if total_predictions > 0 else 0.0
+        return {
+            "grid_string_id": grid_string_id,
+            "max_consecutive_failures": max_consecutive_failures,
+            "total_steps": total_steps,
+            "total_failures": total_failures,
+            "total_predictions": total_predictions,
+            "total_skipped": total_skipped,
+            "accuracy": acc,
+            "history": history,
+            "stopped_early": stopped_early,
+        }
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# 윈도우 9·10 검증 (빈도/가중치 일치·신뢰도 55%·조기 종료·앵커 중첩 시 이전 앵커만)
+# ============================================================================
+
+def validate_first_anchor_window9_10_agree55_cp(
+    grid_string_id,
+    cutoff_grid_string_id,
+    threshold=0,
+    stop_on_match=False,
+    predictions_conn=None,
+    min_confidence_freq=51,
+    min_confidence_weight=51,
+):
+    """
+    윈도우 9·10 검증 (agree55): 앵커당 9→10만 검증, 빈도/가중치 일치·빈도·가중치 신뢰도 모두 임계값 이상,
+    조기 종료(윈도우 9 적중 시), 앵커 중첩 시 이전 앵커만 검증.
+    - simulation_predictions_change_point에서 method='빈도 기반','가중치 기반' 둘 다 조회.
+    - (3a) 빈도 예측값 == 가중치 예측값, (3b) 빈도 신뢰도 >= min_confidence_freq AND 가중치 신뢰도 >= min_confidence_weight; 미충족 시 스킵.
+    - validated_positions로 같은 position을 다음 앵커에서 재검증하지 않음.
+    - threshold: 테이블 조회 시 사용. 이 가설에서는 테이블을 항상 threshold=0으로 생성하므로 0으로 고정.
+    """
+    WINDOW_SIZES = (9, 10)
+    conn = get_change_point_db_connection()
+    pred_conn = predictions_conn if predictions_conn is not None else conn
+    try:
+        df = pd.read_sql_query(
+            "SELECT grid_string FROM preprocessed_grid_strings WHERE id = ?",
+            conn,
+            params=[grid_string_id],
+        )
+        if len(df) == 0:
+            return None
+        grid_string = df.iloc[0]["grid_string"]
+        min_ws = min(WINDOW_SIZES)
+        if len(grid_string) < min_ws:
+            return {
+                "grid_string_id": grid_string_id,
+                "max_consecutive_failures": 0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+                "accuracy": 0.0,
+                "history": [],
+                "stopped_early": False,
+            }
+        anchors = []
+        for i in range(len(grid_string) - 1):
+            if grid_string[i] != grid_string[i + 1]:
+                anchors.append(i)
+        anchors = sorted(list(set(anchors)))
+        if not anchors:
+            return {
+                "grid_string_id": grid_string_id,
+                "max_consecutive_failures": 0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+                "accuracy": 0.0,
+                "history": [],
+                "stopped_early": False,
+            }
+        history = []
+        consecutive_failures = 0
+        max_consecutive_failures = 0
+        total_steps = 0
+        total_failures = 0
+        total_predictions = 0
+        total_skipped = 0
+        stopped_early = False
+        current_pos = 0
+        anchor_idx = 0
+        validated_positions = set()
+
+        while current_pos < len(grid_string) and anchor_idx < len(anchors):
+            while anchor_idx < len(anchors) and anchors[anchor_idx] < current_pos:
+                anchor_idx += 1
+            if anchor_idx >= len(anchors):
+                break
+            next_anchor = anchors[anchor_idx]
+            anchor_matched = False
+            last_pos = None
+
+            for window_size in WINDOW_SIZES:
+                pos = next_anchor + window_size - 1
+                if pos >= len(grid_string):
+                    current_pos = next_anchor + 1
+                    anchor_idx += 1
+                    break
+                if pos < current_pos:
+                    continue
+                if pos in validated_positions:
+                    continue
+
+                total_steps += 1
+                actual = grid_string[pos]
+                prefix_len = window_size - 1
+                prefix = grid_string[pos - prefix_len : pos]
+
+                q = """
+                    SELECT method, predicted_value, confidence, b_ratio, p_ratio
+                    FROM simulation_predictions_change_point
+                    WHERE window_size = ? AND prefix = ? AND threshold = ?
+                """
+                df_pred = pd.read_sql_query(q, pred_conn, params=[window_size, prefix, threshold])
+                by_method = {}
+                for _, row in df_pred.iterrows():
+                    by_method[row["method"]] = row
+
+                freq_row = by_method.get("빈도 기반")
+                weight_row = by_method.get("가중치 기반")
+                if freq_row is None or weight_row is None:
+                    total_skipped += 1
+                    skip_reason = "예측 테이블에 값 없음" if (freq_row is None and weight_row is None) else "빈도/가중치 중 하나 없음"
+                    history.append({
+                        "step": total_steps,
+                        "position": pos,
+                        "anchor": next_anchor,
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": None,
+                        "actual": actual,
+                        "is_correct": None,
+                        "confidence": 0.0,
+                        "selected_window_size": window_size,
+                        "all_predictions": [],
+                        "skipped": True,
+                        "skip_reason": skip_reason,
+                    })
+                    validated_positions.add(pos)
+                    last_pos = pos
+                    continue
+
+                pred_freq = freq_row["predicted_value"]
+                pred_weight = weight_row["predicted_value"]
+                conf_freq = freq_row["confidence"] if freq_row["confidence"] is not None else 0.0
+                conf_weight = weight_row["confidence"] if weight_row["confidence"] is not None else 0.0
+                if pred_freq != pred_weight:
+                    total_skipped += 1
+                    history.append({
+                        "step": total_steps,
+                        "position": pos,
+                        "anchor": next_anchor,
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": None,
+                        "actual": actual,
+                        "is_correct": None,
+                        "confidence": 0.0,
+                        "selected_window_size": window_size,
+                        "all_predictions": [],
+                        "skipped": True,
+                        "skip_reason": "빈도/가중치 예측값 불일치",
+                    })
+                    validated_positions.add(pos)
+                    last_pos = pos
+                    continue
+                if conf_freq < min_confidence_freq or conf_weight < min_confidence_weight:
+                    total_skipped += 1
+                    reasons = []
+                    if conf_freq < min_confidence_freq:
+                        reasons.append(f"빈도 {conf_freq:.1f}% < {min_confidence_freq}%")
+                    if conf_weight < min_confidence_weight:
+                        reasons.append(f"가중치 {conf_weight:.1f}% < {min_confidence_weight}%")
+                    skip_reason = "신뢰도 부족 (" + ", ".join(reasons) + ")"
+                    history.append({
+                        "step": total_steps,
+                        "position": pos,
+                        "anchor": next_anchor,
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": None,
+                        "actual": actual,
+                        "is_correct": None,
+                        "confidence": conf_freq,
+                        "selected_window_size": window_size,
+                        "all_predictions": [],
+                        "skipped": True,
+                        "skip_reason": skip_reason,
+                    })
+                    validated_positions.add(pos)
+                    last_pos = pos
+                    continue
+
+                predicted = pred_freq
+                confidence = conf_freq
+                ok = predicted == actual
+                total_predictions += 1
+                if not ok:
+                    consecutive_failures += 1
+                    total_failures += 1
+                    if consecutive_failures > max_consecutive_failures:
+                        max_consecutive_failures = consecutive_failures
+                else:
+                    consecutive_failures = 0
+                    anchor_matched = True
+
+                history.append({
+                    "step": total_steps,
+                    "position": pos,
+                    "anchor": next_anchor,
+                    "window_size": window_size,
+                    "prefix": prefix,
+                    "predicted": predicted,
+                    "actual": actual,
+                    "is_correct": ok,
+                    "confidence": confidence,
+                    "selected_window_size": window_size,
+                    "all_predictions": [{
+                        "window_size": window_size,
+                        "prefix": prefix,
+                        "predicted": predicted,
+                        "confidence": confidence,
+                        "b_ratio": freq_row["b_ratio"],
+                        "p_ratio": freq_row["p_ratio"],
+                    }],
+                    "skipped": False,
+                })
+                validated_positions.add(pos)
+                last_pos = pos
+
+                if ok and window_size == 9:
                     current_pos = pos + 1
                     anchor_idx += 1
                     anchor_matched = True
@@ -4423,6 +4719,94 @@ def batch_validate_first_anchor_window9_10_cp(
                 method=method,
                 threshold=threshold,
                 stop_on_match=stop_on_match,
+            )
+            if r is not None:
+                results.append(r)
+        if not results:
+            summary = {
+                "total_grid_strings": 0,
+                "avg_accuracy": 0.0,
+                "max_consecutive_failures": 0,
+                "avg_max_consecutive_failures": 0.0,
+                "total_steps": 0,
+                "total_failures": 0,
+                "total_predictions": 0,
+                "total_skipped": 0,
+            }
+        else:
+            n = len(results)
+            summary = {
+                "total_grid_strings": n,
+                "avg_accuracy": sum(x["accuracy"] for x in results) / n,
+                "max_consecutive_failures": max(x["max_consecutive_failures"] for x in results),
+                "avg_max_consecutive_failures": sum(x["max_consecutive_failures"] for x in results) / n,
+                "total_steps": sum(x["total_steps"] for x in results),
+                "total_failures": sum(x["total_failures"] for x in results),
+                "total_predictions": sum(x["total_predictions"] for x in results),
+                "total_skipped": sum(x.get("total_skipped", 0) for x in results),
+                "total_stopped_early": sum(1 for x in results if x.get("stopped_early", False)),
+            }
+        return {
+            "results": results,
+            "summary": summary,
+            "grid_string_ids": test_gids,
+            "train_grid_string_ids": train_gids,
+        }
+    finally:
+        conn.close()
+
+
+def batch_validate_first_anchor_window9_10_agree55_cp(
+    cutoff_grid_string_id,
+    threshold=0,
+    stop_on_match=False,
+    min_confidence_freq=51,
+    min_confidence_weight=51,
+):
+    """
+    윈도우 9·10 agree55 배치 검증.
+    validate_first_anchor_window9_10_agree55_cp를 cutoff 이후 모든 grid_string에 대해 호출.
+    threshold: 테이블 조회 시 사용 (테이블 생성 시 사용한 값, 보통 0).
+    """
+    conn = get_change_point_db_connection()
+    try:
+        df_test = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id > ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        df_train = pd.read_sql_query(
+            "SELECT id FROM preprocessed_grid_strings WHERE id <= ? ORDER BY id",
+            conn,
+            params=[cutoff_grid_string_id],
+        )
+        if len(df_test) == 0:
+            return {
+                "results": [],
+                "summary": {
+                    "total_grid_strings": 0,
+                    "avg_accuracy": 0.0,
+                    "max_consecutive_failures": 0,
+                    "avg_max_consecutive_failures": 0.0,
+                    "total_steps": 0,
+                    "total_failures": 0,
+                    "total_predictions": 0,
+                    "total_skipped": 0,
+                },
+                "grid_string_ids": [],
+                "train_grid_string_ids": df_train["id"].tolist() if len(df_train) > 0 else [],
+            }
+        test_gids = df_test["id"].tolist()
+        train_gids = df_train["id"].tolist() if len(df_train) > 0 else []
+        results = []
+        for gid in test_gids:
+            r = validate_first_anchor_window9_10_agree55_cp(
+                gid,
+                cutoff_grid_string_id,
+                threshold=threshold,
+                stop_on_match=stop_on_match,
+                min_confidence_freq=min_confidence_freq,
+                min_confidence_weight=min_confidence_weight,
             )
             if r is not None:
                 results.append(r)

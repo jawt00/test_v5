@@ -692,6 +692,52 @@ def query_simulation_step_events(run_id, grid_string_id, db_path=None):
         conn.close()
 
 
+def query_step_events_prefix_win_rate(window_sizes, run_id=None, db_path=None):
+    """
+    step_events에서 (window_size, prefix)별 시뮬레이션 승률 집계.
+    skipped=0인 행만 사용, correct/total 비율을 퍼센트로 반환.
+
+    Args:
+        window_sizes: tuple/list of int (e.g. (9, 10, 11))
+        run_id: optional; 지정하면 해당 run만, None이면 전체 run 누적
+        db_path: optional; results DB 경로
+
+    Returns:
+        pandas.DataFrame with columns: window_size, prefix, total, correct, win_rate_pct
+    """
+    import pandas as pd
+
+    conn = get_results_db_connection(db_path)
+    try:
+        init_results_schema(conn)
+        placeholders = ",".join("?" * len(window_sizes))
+        params = list(window_sizes)
+        where_clause = "WHERE skipped = 0 AND window_size IN ({})".format(placeholders)
+        if run_id is not None:
+            where_clause += " AND run_id = ?"
+            params.append(run_id)
+        q = """
+            SELECT window_size, prefix,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) AS correct
+            FROM step_events
+            {}
+            GROUP BY window_size, prefix
+        """.format(where_clause)
+        df = pd.read_sql_query(q, conn, params=params)
+        if len(df) == 0:
+            return df
+        import numpy as np
+        df["win_rate_pct"] = np.where(
+            df["total"] > 0,
+            100.0 * df["correct"].astype(float) / df["total"],
+            0.0,
+        )
+        return df
+    finally:
+        conn.close()
+
+
 def query_simulation_run_detail(run_id, db_path=None):
     """
     시뮬레이션 run 상세: run_meta, run_summary, grid_results( grid_string_id 목록).

@@ -31,6 +31,7 @@ from change_point_hypothesis_module import (
     batch_validate_first_anchor_extended_window_v3_live_next_anchor_cp,
     batch_validate_first_anchor_window9_only_cp,
     batch_validate_first_anchor_window9_10_cp,
+    batch_validate_first_anchor_window9_10_agree55_cp,
     generate_simulation_predictions_table,
     HYPOTHESIS_REGISTRY,
 )
@@ -107,13 +108,14 @@ def main():
     if not _raw:
         st.error("등록된 가설이 없습니다.")
         return
-    _priority = ["first_anchor_extended_window_v3", "first_anchor_window9_10", "first_anchor_window9_only"]
+    _priority = ["first_anchor_extended_window_v3", "first_anchor_window9_10", "first_anchor_window9_10_agree55", "first_anchor_window9_only"]
     available_hypotheses = [h for h in _priority if h in _raw] + [h for h in _raw if h not in _priority]
     separated_hypotheses = [h for h in available_hypotheses if h in (
         "first_anchor_extended_window_v3",
         "first_anchor_extended_window_v3_live_next_anchor",
         "first_anchor_window9_only",
         "first_anchor_window9_10",
+        "first_anchor_window9_10_agree55",
     )]
     
     # 테스트 모드 선택
@@ -189,6 +191,8 @@ def main():
         is_first_anchor_window9_only = (selected_hypothesis_name == "first_anchor_window9_only")
         # 윈도우 9·10: 앵커당 9→10 검증 후 종료, 테이블은 V3와 동일(9~14)
         is_first_anchor_window9_10 = (selected_hypothesis_name == "first_anchor_window9_10")
+        # 윈도우 9·10 agree55: 빈도/가중치 일치·신뢰도 55%·조기 종료·앵커 중첩 시 이전 앵커만
+        is_first_anchor_window9_10_agree55 = (selected_hypothesis_name == "first_anchor_window9_10_agree55")
         
         if is_threshold_skip_anchor_priority:
             st.markdown("#### 윈도우 크기 선택 및 임계값 설정")
@@ -475,6 +479,40 @@ def main():
                         except Exception as e:
                             st.error(f"❌ 예측값 테이블 생성 실패: {str(e)}")
                             st.session_state["window9_10_predictions_generated"] = False
+        elif is_first_anchor_window9_10_agree55:
+            st.markdown("#### 윈도우 9·10 (agree55)")
+            st.info("📌 앵커당 윈도우 9·10만 검증. 빈도/가중치 예측값 일치·**빈도·가중치 신뢰도 모두** 각 임계값 이상일 때만 예측 사용.")
+            ws = [9, 10]
+            st.markdown("#### 신뢰도 최소 조건 (빈도·가중치 둘 다 충족)")
+            col_t1, col_t2 = st.columns(2)
+            with col_t1:
+                thresh_freq_sim = st.number_input("빈도 신뢰도 최소 (%)", 0, 100, 51, key="thresh_agree55_freq", help="빈도 기반 예측의 confidence가 이 값 이상일 때만 조건 충족")
+            with col_t2:
+                thresh_weight_sim = st.number_input("가중치 신뢰도 최소 (%)", 0, 100, 51, key="thresh_agree55_weight", help="가중치 기반 예측의 confidence가 이 값 이상일 때만 조건 충족")
+            st.caption("예측 사용 여부는 **신뢰도(confidence)** 로만 결정됩니다. 테이블 생성 시 임계값은 항상 0이며, 위 값과 무관합니다.")
+            hypothesis_config = {}
+            st.markdown("---")
+            st.markdown("#### 🔧 시뮬레이션 예측값 테이블 생성 (필수)")
+            st.warning(
+                "⚠️ **예측값은 테이블에서만 조회합니다.** "
+                "테이블 생성 시 **임계값은 항상 0**으로 저장됩니다. 예측 사용 여부는 위에서 설정한 **신뢰도(빈도/가중치 %)** 로만 결정됩니다."
+            )
+            if st.button("예측값 테이블 생성", key="generate_agree55_predictions", type="secondary"):
+                if cutoff_sim is None:
+                    st.warning("기준 Grid String ID를 선택하세요.")
+                else:
+                    with st.spinner("예측값 테이블 생성 중... (빈도·가중치 9~14, threshold=0)"):
+                        try:
+                            result = generate_simulation_predictions_table(
+                                cutoff_grid_string_id=cutoff_sim,
+                                window_sizes=(9, 10, 11, 12, 13, 14),
+                                method="빈도 기반",
+                                threshold=0,
+                                methods=("빈도 기반", "가중치 기반"),
+                            )
+                            st.success(f"✅ 예측값 테이블 생성 완료! (저장된 레코드: {result.get('total_saved', 0):,}개)")
+                        except Exception as e:
+                            st.error(f"❌ 예측값 테이블 생성 실패: {str(e)}")
         else:
             st.markdown("#### 윈도우 크기")
             col_w1, col_w2, col_w3, col_w4, col_w5 = st.columns(5)
@@ -580,6 +618,22 @@ def main():
                     st.session_state["test_ws"] = ws
                     st.session_state["test_method"] = method_sim
                     st.session_state["test_thresh"] = thresh_sim
+                    st.session_state["test_results"] = None
+                    st.rerun()
+            elif is_first_anchor_window9_10_agree55:
+                # 윈도우 9·10 agree55: 테이블 생성 필수 아님, 기준 ID만 있으면 실행
+                if cutoff_sim is None:
+                    st.warning("기준 Grid String ID를 선택하세요.")
+                else:
+                    st.session_state["test_mode"] = "single"
+                    st.session_state["test_hypothesis"] = selected_hypothesis_name
+                    st.session_state["test_config"] = hypothesis_config
+                    st.session_state["test_cutoff"] = cutoff_sim if cutoff_sim is not None else 0
+                    st.session_state["test_ws"] = ws
+                    st.session_state["test_method"] = method_sim
+                    st.session_state["test_thresh"] = thresh_freq_sim
+                    st.session_state["test_thresh_freq"] = thresh_freq_sim
+                    st.session_state["test_thresh_weight"] = thresh_weight_sim
                     st.session_state["test_results"] = None
                     st.rerun()
             elif is_first_anchor_extended_v2:
@@ -795,7 +849,7 @@ def main():
                 
                 # 결과 저장 (수동): V3 단일 테스트이고 상세 히스토리가 있을 때만
                 run_params = st.session_state.get("test_run_params")
-                if run_params and run_params.get("hypothesis_key") == "first_anchor_extended_window_v3":
+                if run_params and run_params.get("hypothesis_key") in ("first_anchor_extended_window_v3", "first_anchor_window9_10_agree55"):
                     if st.button("결과 저장", key="save_results_btn", type="secondary", use_container_width=True):
                         try:
                             run_id = save_run_results(
@@ -1179,6 +1233,16 @@ def main():
                             method=method_sim,
                             threshold=thresh_sim,
                         )
+                    # 윈도우 9·10 agree55: 빈도/가중치 일치·빈도·가중치 신뢰도 모두 임계값 이상
+                    elif hyp_name == "first_anchor_window9_10_agree55":
+                        thresh_freq = st.session_state.get("test_thresh_freq", 51)
+                        thresh_weight = st.session_state.get("test_thresh_weight", 51)
+                        res = batch_validate_first_anchor_window9_10_agree55_cp(
+                            cutoff_sim,
+                            threshold=0,
+                            min_confidence_freq=thresh_freq,
+                            min_confidence_weight=thresh_weight,
+                        )
                     # threshold_skip_anchor_priority 가설인 경우 특별한 검증 함수 사용
                     elif hyp_name == "threshold_skip_anchor_priority":
                         window_thresholds = hyp_config.get("window_thresholds", {})
@@ -1264,6 +1328,16 @@ def main():
                                 cutoff_sim,
                                 method=method_sim,
                                 threshold=thresh_sim,
+                            )
+                        # 윈도우 9·10 agree55
+                        elif hyp_name == "first_anchor_window9_10_agree55":
+                            thresh_freq = st.session_state.get("test_thresh_freq", 51)
+                            thresh_weight = st.session_state.get("test_thresh_weight", 51)
+                            res = batch_validate_first_anchor_window9_10_agree55_cp(
+                                cutoff_sim,
+                                threshold=0,
+                                min_confidence_freq=thresh_freq,
+                                min_confidence_weight=thresh_weight,
                             )
                         # threshold_skip_anchor_priority 가설인 경우 특별한 검증 함수 사용
                         elif hyp_name == "threshold_skip_anchor_priority":

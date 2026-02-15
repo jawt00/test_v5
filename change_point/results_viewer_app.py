@@ -130,12 +130,30 @@ def query_prediction_table_confidence_stats(window_sizes=(9, 10, 11)):
 def query_prediction_table_prefix_detail(window_sizes=(9, 10, 11)):
     """
     simulation_predictions_change_point 테이블에서
-    모든 prefix별 신뢰도 상세 조회.
+    모든 prefix별 신뢰도 상세 조회. pred_frequency 컬럼이 있으면 포함.
     """
     conn = get_change_point_db_connection()
     try:
         placeholders = ",".join("?" * len(window_sizes))
-        q = f"""
+        q_with_freq = f"""
+            SELECT
+                window_size,
+                prefix,
+                method,
+                threshold,
+                predicted_value,
+                confidence,
+                b_ratio,
+                p_ratio,
+                pred_frequency
+            FROM simulation_predictions_change_point
+            WHERE window_size IN ({placeholders})
+            ORDER BY window_size, prefix, method
+        """
+        df = pd.read_sql_query(q_with_freq, conn, params=list(window_sizes))
+        return df
+    except Exception:
+        q_no_freq = f"""
             SELECT
                 window_size,
                 prefix,
@@ -149,10 +167,12 @@ def query_prediction_table_prefix_detail(window_sizes=(9, 10, 11)):
             WHERE window_size IN ({placeholders})
             ORDER BY window_size, prefix, method
         """
-        df = pd.read_sql_query(q, conn, params=list(window_sizes))
-        return df
-    except Exception as e:
-        return pd.DataFrame()
+        try:
+            df = pd.read_sql_query(q_no_freq, conn, params=list(window_sizes))
+            df["pred_frequency"] = None
+            return df
+        except Exception:
+            return pd.DataFrame()
     finally:
         conn.close()
 
@@ -539,9 +559,18 @@ def _render_prediction_confidence_summary(window_sizes):
     st.caption(f"총 {len(display_df)}개 (메소드×윈도우) 조합 · 윈도우: {window_sizes}")
 
 
+def _format_pred_frequency(value, method):
+    """예측 빈도 표시: 빈도 기반/안전 우선은 정수, 가중치 기반은 소수 1자리."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "-"
+    if method == "가중치 기반":
+        return f"{float(value):.1f}"
+    return int(value)
+
+
 def _build_prefix_method_comparison_df(df_raw, window_sizes):
     """
-    같은 prefix에 대해 메소드별 예측값·신뢰도를 나란히 보여주는 피벗 테이블 생성.
+    같은 prefix에 대해 메소드별 예측값·신뢰도·예측 빈도를 나란히 보여주는 피벗 테이블 생성.
     threshold=0 기준 (라이브 앱과 동일). 시뮬레이션 승률(%) 컬럼 포함.
     """
     if df_raw is None or len(df_raw) == 0:
@@ -556,15 +585,23 @@ def _build_prefix_method_comparison_df(df_raw, window_sizes):
     rows = []
     for (ws, prefix), grp in df.groupby(["window_size", "prefix"]):
         row = {"윈도우": ws, "prefix": prefix}
+        sub_freq = grp[grp["method"] == "빈도 기반"]
+        total_freq = sub_freq.iloc[0].get("pred_frequency") if len(sub_freq) > 0 else None
+        if total_freq is not None and not (isinstance(total_freq, float) and pd.isna(total_freq)):
+            row["전체 빈도"] = int(total_freq)
+        else:
+            row["전체 빈도"] = "-"
         for m in methods:
             sub = grp[grp["method"] == m]
             if len(sub) > 0:
                 r = sub.iloc[0]
                 row[f"{m}_예측"] = r["predicted_value"] if pd.notna(r["predicted_value"]) and r["predicted_value"] else "-"
                 row[f"{m}_신뢰도(%)"] = r["confidence"] if pd.notna(r["confidence"]) else "-"
+                row[f"{m}_예측빈도"] = _format_pred_frequency(r.get("pred_frequency"), m)
             else:
                 row[f"{m}_예측"] = "-"
                 row[f"{m}_신뢰도(%)"] = "-"
+                row[f"{m}_예측빈도"] = "-"
         rows.append(row)
     display_df = pd.DataFrame(rows)
     df_win = query_step_events_prefix_win_rate(window_sizes)
@@ -627,16 +664,47 @@ def _render_prediction_prefix_detail(window_sizes):
         st.info("예측 테이블에 데이터가 없습니다.")
         return
 
+    pred_freq_display = df.apply(
+        lambda r: _format_pred_frequency(r.get("pred_frequency"), r["method"]),
+        axis=1,
+    )
+    freq_total = (
+        df[df["method"] == "빈도 기반"][["window_size", "prefix", "pred_frequency"]]
+        .drop_duplicates()
+        .rename(columns={"pred_frequency": "total_freq"})
+    )
     display_df = pd.DataFrame({
         "윈도우": df["window_size"],
         "prefix": df["prefix"],
         "메소드": df["method"],
         "임계값": df["threshold"],
         "예측값": df["predicted_value"],
+        "예측 빈도": pred_freq_display,
         "신뢰도 (%)": (df["confidence"].round(2)),
         "B 비율 (%)": (df["b_ratio"].round(2)),
         "P 비율 (%)": (df["p_ratio"].round(2)),
     })
+    if len(freq_total) > 0:
+        display_df = display_df.merge(
+            freq_total,
+            left_on=["윈도우", "prefix"],
+            right_on=["window_size", "prefix"],
+            how="left",
+        )
+        display_df["전체 빈도"] = display_df["total_freq"].apply(
+            lambda x: int(x) if pd.notna(x) and x is not None else "-"
+        )
+        display_df = display_df.drop(columns=["window_size", "total_freq"], errors="ignore")
+        if "prefix_y" in display_df.columns:
+            display_df = display_df.drop(columns=["prefix_y"])
+        lead = ["윈도우", "prefix", "전체 빈도"]
+        rest = [c for c in display_df.columns if c not in lead]
+        display_df = display_df[lead + rest]
+    else:
+        display_df["전체 빈도"] = "-"
+        lead = ["윈도우", "prefix", "전체 빈도"]
+        rest = [c for c in display_df.columns if c not in lead]
+        display_df = display_df[lead + rest]
     df_win = query_step_events_prefix_win_rate(window_sizes)
     if len(df_win) > 0:
         display_df = display_df.merge(

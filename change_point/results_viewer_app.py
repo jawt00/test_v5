@@ -49,10 +49,11 @@ def _format_predicted_display(entry, is_live=False):
     predicted = entry.get("predicted")
     skipped = entry.get("skipped") == 1 if isinstance(entry.get("skipped"), (int, float)) else bool(entry.get("skipped"))
     skip_reason = entry.get("skip_reason") or ""
-    if skipped and skip_reason:
-        return f"- ({skip_reason})"
     if skipped:
-        return "- (skip)"
+        sp = entry.get("skipped_prediction")
+        if sp is not None:
+            return f"{sp} ({skip_reason})" if skip_reason else str(sp)
+        return f"- ({skip_reason})" if skip_reason else "- (skip)"
     return str(predicted) if predicted else "-"
 
 

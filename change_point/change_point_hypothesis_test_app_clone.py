@@ -32,6 +32,7 @@ from change_point_hypothesis_module import (
     batch_validate_first_anchor_window9_only_cp,
     batch_validate_first_anchor_window9_10_cp,
     batch_validate_first_anchor_window9_10_agree55_v2_cp,
+    batch_validate_first_anchor_window9_10_agree55_v3_cp,
     generate_simulation_predictions_table,
     HYPOTHESIS_REGISTRY,
 )
@@ -108,7 +109,7 @@ def main():
     if not _raw:
         st.error("등록된 가설이 없습니다.")
         return
-    _priority = ["first_anchor_extended_window_v3", "first_anchor_window9_10", "first_anchor_window9_10_agree55_v2", "first_anchor_window9_only"]
+    _priority = ["first_anchor_extended_window_v3", "first_anchor_window9_10", "first_anchor_window9_10_agree55_v2", "first_anchor_window9_10_agree55_v3", "first_anchor_window9_only"]
     available_hypotheses = [h for h in _priority if h in _raw] + [h for h in _raw if h not in _priority]
     
     # 테스트 모드 선택
@@ -186,6 +187,7 @@ def main():
         is_first_anchor_window9_10 = (selected_hypothesis_name == "first_anchor_window9_10")
         # agree55 v2: 가중치 신뢰도 70% 이상이면 무조건 가중치 예측 사용
         is_first_anchor_window9_10_agree55_v2 = (selected_hypothesis_name == "first_anchor_window9_10_agree55_v2")
+        is_first_anchor_window9_10_agree55_v3 = (selected_hypothesis_name == "first_anchor_window9_10_agree55_v3")
 
         if is_threshold_skip_anchor_priority:
             st.markdown("#### 윈도우 크기 선택 및 임계값 설정")
@@ -479,15 +481,46 @@ def main():
             st.markdown("#### 규칙에 적용되는 신뢰도")
             col_t1, col_t2, col_t3 = st.columns(3)
             with col_t1:
-                weight_unconditional_v2 = st.number_input("가중치 기반 신뢰도 (무조건 사용 임계값, %)", 0, 100, 70, key="thresh_agree55_v2_weight_unconditional_clone", help="이 값 이상이면 무조건 가중치 예측값 사용")
+                weight_unconditional_v2 = st.number_input("가중치 기반 신뢰도 (무조건 사용 임계값, %)", 0.0, 100.0, 72.5, 0.1, key="thresh_agree55_v2_weight_unconditional_clone", help="이 값 이상이면 무조건 가중치 예측값 사용 (0.1 단위)")
             with col_t2:
-                thresh_freq_v2 = st.number_input("빈도 신뢰도 최소 (%)", 0, 100, 51, key="thresh_agree55_v2_freq_clone")
+                thresh_freq_v2 = st.number_input("빈도 신뢰도 최소 (%)", 0.0, 100.0, 52.5, 0.1, key="thresh_agree55_v2_freq_clone")
             with col_t3:
-                thresh_weight_v2 = st.number_input("가중치 신뢰도 최소 (%)", 0, 100, 51, key="thresh_agree55_v2_weight_clone")
+                thresh_weight_v2 = st.number_input("가중치 신뢰도 최소 (%)", 0.0, 100.0, 0.0, 0.1, key="thresh_agree55_v2_weight_clone")
             hypothesis_config = {}
             st.markdown("---")
             st.markdown("#### 🔧 시뮬레이션 예측값 테이블 생성 (필수)")
             if st.button("예측값 테이블 생성", key="generate_agree55_v2_predictions_clone", type="secondary"):
+                if cutoff_sim is None:
+                    st.warning("기준 Grid String ID를 선택하세요.")
+                else:
+                    with st.spinner("예측값 테이블 생성 중... (빈도·가중치 9~14, threshold=0)"):
+                        try:
+                            result = generate_simulation_predictions_table(
+                                cutoff_grid_string_id=cutoff_sim,
+                                window_sizes=(9, 10, 11, 12, 13, 14),
+                                method="빈도 기반",
+                                threshold=0,
+                                methods=("빈도 기반", "가중치 기반"),
+                            )
+                            st.success(f"✅ 예측값 테이블 생성 완료! (저장된 레코드: {result.get('total_saved', 0):,}개)")
+                        except Exception as e:
+                            st.error(f"❌ 예측값 테이블 생성 실패: {str(e)}")
+        elif is_first_anchor_window9_10_agree55_v3:
+            st.markdown("#### 윈도우 9·10 (agree55 v3)")
+            st.info("📌 v2 복제. 규칙 수정 후 시뮬레이션용.")
+            ws = [9, 10]
+            st.markdown("#### 규칙에 적용되는 신뢰도")
+            col_t1, col_t2, col_t3 = st.columns(3)
+            with col_t1:
+                weight_unconditional_v3 = st.number_input("가중치 기반 신뢰도 (무조건 사용 임계값, %)", 0.0, 100.0, 72.5, 0.1, key="thresh_agree55_v3_weight_unconditional_clone")
+            with col_t2:
+                thresh_freq_v3 = st.number_input("빈도 신뢰도 최소 (%)", 0.0, 100.0, 52.5, 0.1, key="thresh_agree55_v3_freq_clone")
+            with col_t3:
+                thresh_weight_v3 = st.number_input("가중치 신뢰도 최소 (%)", 0.0, 100.0, 0.0, 0.1, key="thresh_agree55_v3_weight_clone")
+            hypothesis_config = {}
+            st.markdown("---")
+            st.markdown("#### 🔧 시뮬레이션 예측값 테이블 생성 (필수)")
+            if st.button("예측값 테이블 생성", key="generate_agree55_v3_predictions_clone", type="secondary"):
                 if cutoff_sim is None:
                     st.warning("기준 Grid String ID를 선택하세요.")
                 else:
@@ -616,6 +649,22 @@ def main():
                     st.session_state["test_thresh_freq"] = thresh_freq_v2
                     st.session_state["test_thresh_weight"] = thresh_weight_v2
                     st.session_state["test_weight_unconditional_v2"] = weight_unconditional_v2
+                    st.session_state["test_results"] = None
+                    st.rerun()
+            elif is_first_anchor_window9_10_agree55_v3:
+                if cutoff_sim is None:
+                    st.warning("기준 Grid String ID를 선택하세요.")
+                else:
+                    st.session_state["test_mode"] = "single"
+                    st.session_state["test_hypothesis"] = selected_hypothesis_name
+                    st.session_state["test_config"] = hypothesis_config
+                    st.session_state["test_cutoff"] = cutoff_sim if cutoff_sim is not None else 0
+                    st.session_state["test_ws"] = ws
+                    st.session_state["test_method"] = method_sim
+                    st.session_state["test_thresh"] = thresh_freq_v3
+                    st.session_state["test_thresh_freq"] = thresh_freq_v3
+                    st.session_state["test_thresh_weight"] = thresh_weight_v3
+                    st.session_state["test_weight_unconditional_v2"] = weight_unconditional_v3
                     st.session_state["test_results"] = None
                     st.rerun()
             elif is_first_anchor_extended_v2:
@@ -831,7 +880,7 @@ def main():
                 
                 # 결과 저장 (수동): V3 단일 테스트이고 상세 히스토리가 있을 때만
                 run_params = st.session_state.get("test_run_params")
-                saveable_hypotheses = ("first_anchor_extended_window_v3", "first_anchor_window9_10", "first_anchor_window9_10_agree55_v2")
+                saveable_hypotheses = ("first_anchor_extended_window_v3", "first_anchor_window9_10", "first_anchor_window9_10_agree55_v2", "first_anchor_window9_10_agree55_v3")
                 if run_params and run_params.get("hypothesis_key") in saveable_hypotheses:
                     if st.button("결과 저장", key="save_results_btn", type="secondary", use_container_width=True):
                         try:
@@ -1218,10 +1267,21 @@ def main():
                         )
                     # agree55 v2
                     elif hyp_name == "first_anchor_window9_10_agree55_v2":
-                        thresh_freq = st.session_state.get("test_thresh_freq", 51)
-                        thresh_weight = st.session_state.get("test_thresh_weight", 51)
-                        weight_unconditional = st.session_state.get("test_weight_unconditional_v2", 70)
+                        thresh_freq = st.session_state.get("test_thresh_freq", 52.5)
+                        thresh_weight = st.session_state.get("test_thresh_weight", 0.0)
+                        weight_unconditional = st.session_state.get("test_weight_unconditional_v2", 72.5)
                         res = batch_validate_first_anchor_window9_10_agree55_v2_cp(
+                            cutoff_sim,
+                            threshold=0,
+                            min_confidence_freq=thresh_freq,
+                            min_confidence_weight=thresh_weight,
+                            weight_confidence_unconditional=weight_unconditional,
+                        )
+                    elif hyp_name == "first_anchor_window9_10_agree55_v3":
+                        thresh_freq = st.session_state.get("test_thresh_freq", 52.5)
+                        thresh_weight = st.session_state.get("test_thresh_weight", 0.0)
+                        weight_unconditional = st.session_state.get("test_weight_unconditional_v2", 72.5)
+                        res = batch_validate_first_anchor_window9_10_agree55_v3_cp(
                             cutoff_sim,
                             threshold=0,
                             min_confidence_freq=thresh_freq,
@@ -1316,10 +1376,21 @@ def main():
                             )
                         # agree55 v2
                         elif hyp_name == "first_anchor_window9_10_agree55_v2":
-                            thresh_freq = st.session_state.get("test_thresh_freq", 51)
-                            thresh_weight = st.session_state.get("test_thresh_weight", 51)
-                            weight_unconditional = st.session_state.get("test_weight_unconditional_v2", 70)
+                            thresh_freq = st.session_state.get("test_thresh_freq", 52.5)
+                            thresh_weight = st.session_state.get("test_thresh_weight", 0.0)
+                            weight_unconditional = st.session_state.get("test_weight_unconditional_v2", 72.5)
                             res = batch_validate_first_anchor_window9_10_agree55_v2_cp(
+                                cutoff_sim,
+                                threshold=0,
+                                min_confidence_freq=thresh_freq,
+                                min_confidence_weight=thresh_weight,
+                                weight_confidence_unconditional=weight_unconditional,
+                            )
+                        elif hyp_name == "first_anchor_window9_10_agree55_v3":
+                            thresh_freq = st.session_state.get("test_thresh_freq", 52.5)
+                            thresh_weight = st.session_state.get("test_thresh_weight", 0.0)
+                            weight_unconditional = st.session_state.get("test_weight_unconditional_v2", 72.5)
+                            res = batch_validate_first_anchor_window9_10_agree55_v3_cp(
                                 cutoff_sim,
                                 threshold=0,
                                 min_confidence_freq=thresh_freq,

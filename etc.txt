@@ -142,7 +142,7 @@ streamlit run change_point_live_game_app_flow_fixed.py
 streamlit run change_point_live_game_app_three_modes.py
 streamlit run change_point_live_game_app_three_modes_copy.py
 
-streamlit run livegame_three_modes_v2.py
+streamlit run livegame_three_modes_v1.py
 streamlit run livegame_three_modes_v2.py
 
 streamlit run change_point_incremental_validation_app.py

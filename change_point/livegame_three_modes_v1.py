@@ -24,7 +24,7 @@ st.set_page_config(
     layout="wide",
 )
 
-MODES = ("v3", "window9", "window9_10")
+MODES = ("window9_10", "v3", "window9")
 WINDOW_SIZES_V3 = (9, 10, 11, 12, 13, 14)
 WINDOW_SIZES_W9 = (9,)
 WINDOW_SIZES_W9_10 = (9, 10)
@@ -554,7 +554,7 @@ def _style_validation_history_df(df: pd.DataFrame) -> "pd.io.formats.style.Style
 
 def main():
     st.title("Change-point 플로우 라이브 게임 (3가지 검증 방식)")
-    st.markdown("**Cold Start → State Handoff → Live Loop** · V3 / 윈도우 9 / 윈도우 9·10 병렬 실행")
+    st.markdown("**Cold Start → State Handoff → Live Loop** · 윈도우 9·10 / V3 / 윈도우 9 병렬 실행")
 
     if "flow_result" not in st.session_state:
         st.session_state.flow_result = None
@@ -611,8 +611,8 @@ def main():
         render_grid_string_and_anchors(gs, anchors=anchors)
 
         st.markdown("### 현재 상태 (현재 포지션에 대한 3가지 검증 예측값)")
-        # 모드별 state 디버깅 정보 (기존 라이브앱과 동일 형식)
-        mode_labels = {"v3": "V3", "window9": "W9", "window9_10": "W9_10"}
+        # 모드별 state 디버깅 정보 · 표시 순서: W9_10 → V3 → W9
+        mode_labels = {"window9_10": "W9_10", "v3": "V3", "window9": "W9"}
         for mode in MODES:
             r = results.get(mode, {})
             state = r.get("state") or {}
@@ -630,7 +630,7 @@ def main():
         st.caption("위 Grid의 포지션 인덱스·앵커 인덱스(a0,a1,…)와 동일한 0-based 기준")
         current_table = build_current_state_table(result)
         st.dataframe(pd.DataFrame(current_table), use_container_width=True, hide_index=True)
-        st.caption("다음 예측 위치 = len(grid_string). V3 / W9 / W9_10 각각 예측값(P 또는 B, 없으면 -).")
+        st.caption("다음 예측 위치 = len(grid_string). W9_10 / V3 / W9 각각 예측값(P 또는 B, 없으면 -).")
 
         st.caption("B / P 입력 (3모드 동시 단일 스텝 검증)")
         col_b, col_p, _ = st.columns([1, 1, 4])
@@ -673,7 +673,7 @@ def main():
                 except Exception as e:
                     st.error(f"live_step 실패: {e}")
 
-        st.markdown("### 검증 히스토리 테이블 (포지션별 V3 / W9 / W9_10)")
+        st.markdown("### 검증 히스토리 테이블 (포지션별 W9_10 / V3 / W9)")
         history_rows = build_validation_history_table_by_position(result)
         if history_rows:
             df_history = pd.DataFrame(history_rows)

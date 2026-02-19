@@ -181,6 +181,10 @@ git reset --hard origin/change_point-v2
 source /Users/tj/test_v5/venv/bin/activate
 cd /Users/tj/test_v5/change_point
 
+
+git push -u origin change_point-local
+
+
 윈도우 크기=10, 임계값=59.0%
 12 64 13%
 11 60

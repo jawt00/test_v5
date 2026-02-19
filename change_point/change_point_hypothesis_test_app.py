@@ -1086,6 +1086,11 @@ def main():
             if not rr:
                 st.info("검증 결과가 없습니다.")
             else:
+                # 저장 완료 후 리런 시 한 번만 표시
+                if "last_save_success" in st.session_state:
+                    info = st.session_state.pop("last_save_success")
+                    run_id = info.get("run_id", "")
+                    st.success(f"✅ **결과 저장 완료** — run_id: `{run_id}` (results_db/sim_results_change_point.db)")
                 col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
                     max_failures = sm.get('max_consecutive_failures', 0)
@@ -1099,9 +1104,18 @@ def main():
                 with col5:
                     st.metric("스킵 횟수", f"{sm.get('total_skipped', 0):,}")
                 
-                # 결과 저장 (수동): V3 단일 테스트이고 상세 히스토리가 있을 때만
+                # 결과 저장 (수동): 단일 테스트이고 상세 히스토리가 있을 때 (윈도우 9·10 계열 + V3/agree55 포함)
                 run_params = st.session_state.get("test_run_params")
-                if run_params and run_params.get("hypothesis_key") in ("first_anchor_extended_window_v3", "first_anchor_window9_10_v3", "first_anchor_window9_10_agree55", "first_anchor_window9_10_agree55_v2", "first_anchor_window9_10_agree55_v3"):
+                _save_allowed = (
+                    "first_anchor_extended_window_v3",
+                    "first_anchor_window9_10",
+                    "first_anchor_window9_10_v2",
+                    "first_anchor_window9_10_v3",
+                    "first_anchor_window9_10_agree55",
+                    "first_anchor_window9_10_agree55_v2",
+                    "first_anchor_window9_10_agree55_v3",
+                )
+                if run_params and run_params.get("hypothesis_key") in _save_allowed:
                     if st.button("결과 저장", key="save_results_btn", type="secondary", use_container_width=True):
                         try:
                             run_id = save_run_results(
@@ -1109,7 +1123,7 @@ def main():
                                 results=rr,
                                 summary=sm,
                             )
-                            st.success(f"저장 완료. run_id: {run_id}")
+                            st.session_state["last_save_success"] = {"run_id": run_id}
                             st.rerun()
                         except Exception as e:
                             st.error(f"저장 실패: {e}")

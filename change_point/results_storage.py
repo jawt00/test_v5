@@ -967,6 +967,62 @@ def query_live_stats(db_path=None):
         conn.close()
 
 
+def query_simulation_consecutive_failure_stats(hypothesis_key, db_path=None):
+    """
+    특정 가설의 시뮬레이션 결과에서 연속 불일치(consecutive failures) 통계.
+    grid_results와 runs JOIN하여 hypothesis_key로 필터 후 집계.
+
+    Returns:
+        dict: {
+            "total_grid_results": int,
+            "max_consecutive_failures_dist": {0: n, 1: n, ...},
+            "avg_max_consecutive_failures": float,
+            "worst_max_consecutive_failures": int,
+            "avg_accuracy_overall": float,
+        }
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        import pandas as pd
+        df_agg = pd.read_sql_query(
+            """
+            SELECT
+                COUNT(*) AS total_grid_results,
+                COALESCE(AVG(gr.max_consecutive_failures), 0) AS avg_mcf,
+                COALESCE(MAX(gr.max_consecutive_failures), 0) AS worst_mcf,
+                COALESCE(AVG(gr.accuracy), 0) AS avg_acc
+            FROM grid_results gr
+            JOIN runs r ON gr.run_id = r.run_id
+            WHERE r.hypothesis_key = ?
+            """,
+            conn,
+            params=[hypothesis_key],
+        )
+        df_dist = pd.read_sql_query(
+            """
+            SELECT gr.max_consecutive_failures AS mcf, COUNT(*) AS cnt
+            FROM grid_results gr
+            JOIN runs r ON gr.run_id = r.run_id
+            WHERE r.hypothesis_key = ?
+            GROUP BY gr.max_consecutive_failures
+            ORDER BY gr.max_consecutive_failures
+            """,
+            conn,
+            params=[hypothesis_key],
+        )
+        row = df_agg.iloc[0] if len(df_agg) > 0 else {}
+        dist = {int(r["mcf"]) if r["mcf"] is not None else 0: int(r["cnt"]) for _, r in df_dist.iterrows()}
+        return {
+            "total_grid_results": int(row.get("total_grid_results", 0) or 0),
+            "max_consecutive_failures_dist": dist,
+            "avg_max_consecutive_failures": float(row.get("avg_mcf", 0) or 0),
+            "worst_max_consecutive_failures": int(row.get("worst_mcf", 0) or 0),
+            "avg_accuracy_overall": float(row.get("avg_acc", 0) or 0),
+        }
+    finally:
+        conn.close()
+
+
 def query_simulation_high_failure_results(
     min_max_consecutive_failures=1,
     limit=100,
@@ -1091,5 +1147,146 @@ def query_simulation_hypothesis_keys(db_path=None):
             conn,
         )
         return df["hypothesis_key"].tolist() if len(df) > 0 else []
+    finally:
+        conn.close()
+
+
+def _max_consecutive_matches_from_events(events):
+    """
+    step 이벤트 리스트에서 연속 일치(consecutive correct) 최대 횟수.
+    skipped=1인 스텝은 제외하고, is_correct=1만 연속으로 카운트.
+    """
+    max_m = 0
+    cur = 0
+    for e in events:
+        if e.get("skipped") == 1 or e.get("skipped") is True:
+            continue
+        if e.get("is_correct") == 1 or e.get("is_correct") is True:
+            cur += 1
+            max_m = max(max_m, cur)
+        else:
+            cur = 0
+    return max_m
+
+
+def query_simulation_consecutive_match_stats(hypothesis_key, db_path=None):
+    """
+    특정 가설의 시뮬레이션 결과에서 연속 일치(consecutive correct) 통계.
+    step_events에서 (run_id, grid_string_id)별로 연속 일치 최대 횟수를 계산한 뒤 집계.
+
+    Returns:
+        dict: {
+            "total_grid_results": int,
+            "max_consecutive_matches_dist": {0: n, 1: n, ...},
+            "avg_max_consecutive_matches": float,
+            "best_max_consecutive_matches": int,
+            "avg_accuracy_overall": float,
+        }
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        import pandas as pd
+        df = pd.read_sql_query(
+            """
+            SELECT se.run_id, se.grid_string_id, se.step, se.is_correct, se.skipped
+            FROM step_events se
+            JOIN runs r ON se.run_id = r.run_id
+            WHERE r.hypothesis_key = ?
+            ORDER BY se.run_id, se.grid_string_id, se.step
+            """,
+            conn,
+            params=[hypothesis_key],
+        )
+        if len(df) == 0:
+            return {
+                "total_grid_results": 0,
+                "max_consecutive_matches_dist": {},
+                "avg_max_consecutive_matches": 0.0,
+                "best_max_consecutive_matches": 0,
+                "avg_accuracy_overall": 0.0,
+            }
+        mcm_list = []
+        for (run_id, gid), grp in df.groupby(["run_id", "grid_string_id"]):
+            events = grp.sort_values("step").to_dict("records")
+            mcm = _max_consecutive_matches_from_events(events)
+            mcm_list.append({"run_id": run_id, "grid_string_id": gid, "max_consecutive_matches": mcm})
+        df_mcm = pd.DataFrame(mcm_list)
+        placeholders = ",".join("?" * len(df_mcm["run_id"].unique().tolist()))
+        df_gr = pd.read_sql_query(
+            """
+            SELECT run_id, grid_string_id, accuracy
+            FROM grid_results
+            WHERE run_id IN ({})
+            """.format(placeholders),
+            conn,
+            params=df_mcm["run_id"].unique().tolist(),
+        )
+        df_mcm = df_mcm.merge(df_gr, on=["run_id", "grid_string_id"], how="left")
+        dist = df_mcm["max_consecutive_matches"].value_counts().sort_index()
+        dist = {int(k): int(v) for k, v in dist.items()}
+        return {
+            "total_grid_results": len(df_mcm),
+            "max_consecutive_matches_dist": dist,
+            "avg_max_consecutive_matches": float(df_mcm["max_consecutive_matches"].mean()),
+            "best_max_consecutive_matches": int(df_mcm["max_consecutive_matches"].max()),
+            "avg_accuracy_overall": float(df_mcm["accuracy"].mean()) if "accuracy" in df_mcm.columns and df_mcm["accuracy"].notna().any() else 0.0,
+        }
+    finally:
+        conn.close()
+
+
+def query_simulation_top_consecutive_matches(hypothesis_key, limit=10, db_path=None):
+    """
+    특정 가설 결과에서 연속 일치가 가장 많이 발생한 개별 스트링 상위 limit건.
+
+    Returns:
+        list of dict: [{
+            "run_id", "grid_string_id", "max_consecutive_matches", "accuracy",
+            "total_predictions", "total_skipped", "created_at", "hypothesis_key", ...
+        }, ...]
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        import pandas as pd
+        df = pd.read_sql_query(
+            """
+            SELECT se.run_id, se.grid_string_id, se.step, se.is_correct, se.skipped
+            FROM step_events se
+            JOIN runs r ON se.run_id = r.run_id
+            WHERE r.hypothesis_key = ?
+            ORDER BY se.run_id, se.grid_string_id, se.step
+            """,
+            conn,
+            params=[hypothesis_key],
+        )
+        if len(df) == 0:
+            return []
+        mcm_list = []
+        for (run_id, gid), grp in df.groupby(["run_id", "grid_string_id"]):
+            events = grp.sort_values("step").to_dict("records")
+            mcm = _max_consecutive_matches_from_events(events)
+            mcm_list.append({"run_id": run_id, "grid_string_id": gid, "max_consecutive_matches": mcm})
+        df_mcm = pd.DataFrame(mcm_list)
+        df_mcm = df_mcm.sort_values("max_consecutive_matches", ascending=False).head(limit)
+        run_ids = df_mcm["run_id"].unique().tolist()
+        placeholders = ",".join("?" * len(run_ids))
+        df_r = pd.read_sql_query(
+            "SELECT run_id, created_at, hypothesis_key FROM runs WHERE run_id IN ({})".format(placeholders),
+            conn,
+            params=run_ids,
+        )
+        df_gr = pd.read_sql_query(
+            """
+            SELECT run_id, grid_string_id, accuracy, total_predictions, total_skipped, total_failures
+            FROM grid_results
+            WHERE run_id IN ({})
+            """.format(placeholders),
+            conn,
+            params=run_ids,
+        )
+        df_mcm = df_mcm.merge(df_r, on="run_id", how="left").merge(
+            df_gr, on=["run_id", "grid_string_id"], how="left"
+        )
+        return df_mcm.to_dict("records")
     finally:
         conn.close()

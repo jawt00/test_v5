@@ -23,6 +23,9 @@ from results_storage import (
     query_simulation_stats,
     query_simulation_high_failure_results,
     query_simulation_hypothesis_keys,
+    query_simulation_consecutive_match_stats,
+    query_simulation_top_consecutive_matches,
+    query_simulation_consecutive_failure_stats,
     query_step_events_prefix_win_rate,
     query_live_run_detail,
     query_live_runs_list,
@@ -183,10 +186,12 @@ def main():
     st.markdown("통계, 연속 불일치 높은 결과 파악, 상세 히스토리 조회")
     st.markdown("---")
 
-    t1, t2, t3 = st.tabs([
+    t1, t2, t3, t4, t5 = st.tabs([
         "연속 불일치 높은 결과",
         "통계 대시보드",
         "상세 조회",
+        "윈도우 9·10 전용 · 연속 일치",
+        "윈도우 9·10 전용 · 연속 불일치",
     ])
 
     with t1:
@@ -195,6 +200,10 @@ def main():
         _render_stats_tab()
     with t3:
         _render_detail_tab()
+    with t4:
+        _render_window910_consecutive_match_tab()
+    with t5:
+        _render_window910_consecutive_failure_tab()
 
     st.markdown("---")
     st.markdown("## 예측 테이블 신뢰도")
@@ -523,6 +532,198 @@ def _render_detail_tab():
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+def _render_window910_consecutive_match_tab():
+    """윈도우 9·10 전용 가설(first_anchor_window9_10) 결과만 조회 · 연속 일치 통계 및 상위 10개 스트링."""
+    st.markdown("### 윈도우 9·10 전용 · 연속 일치")
+    st.caption("가설 `first_anchor_window9_10` 시뮬레이션 결과만 대상으로, 연속 일치(consecutive correct) 통계와 연속 일치가 가장 많은 스트링 상위 10건을 표시합니다.")
+
+    hypothesis_key = "first_anchor_window9_10"
+
+    stats = query_simulation_consecutive_match_stats(hypothesis_key)
+    total = stats.get("total_grid_results", 0)
+    if total == 0:
+        st.info("해당 가설의 시뮬레이션 결과가 없습니다. (hypothesis_key: first_anchor_window9_10)")
+        return
+
+    st.markdown("#### 연속 일치 통계")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.metric("총 Grid Result 수", total)
+    with c2:
+        st.metric("평균 연속 일치(최대)", f"{stats.get('avg_max_consecutive_matches', 0):.2f}회")
+    with c3:
+        st.metric("최고 연속 일치", f"{stats.get('best_max_consecutive_matches', 0)}회")
+    with c4:
+        st.metric("평균 정확도", f"{stats.get('avg_accuracy_overall', 0):.2f}%")
+    with c5:
+        st.metric("가설", hypothesis_key)
+
+    dist = stats.get("max_consecutive_matches_dist", {})
+    if dist:
+        dist_sorted = sorted(dist.items())
+        labels = [f"{k}회" for k, _ in dist_sorted]
+        values = [v for _, v in dist_sorted]
+        if values:
+            st.bar_chart(pd.DataFrame({"개수": values}, index=labels))
+        st.caption("연속 일치(최대) 분포 — grid_string 단위")
+
+    st.markdown("#### 연속 일치가 가장 많은 스트링 (상위 10건)")
+    top_list = query_simulation_top_consecutive_matches(hypothesis_key, limit=10)
+    if not top_list:
+        st.info("데이터가 없습니다.")
+    else:
+        table_df = pd.DataFrame([
+            {
+                "run_id": r.get("run_id", ""),
+                "grid_string_id": r.get("grid_string_id"),
+                "최대 연속 일치": r.get("max_consecutive_matches", 0),
+                "정확도 (%)": f"{r.get('accuracy', 0):.2f}" if r.get("accuracy") is not None else "-",
+                "총 예측": r.get("total_predictions", 0),
+                "스킵": r.get("total_skipped", 0),
+                "실패": r.get("total_failures", 0),
+                "created_at": str(r.get("created_at", ""))[:19] if r.get("created_at") else "-",
+            }
+            for r in top_list
+        ])
+        st.dataframe(table_df, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.markdown("#### grid_string_id로 상세 히스토리 조회")
+    gid_input = st.number_input(
+        "Grid String ID",
+        min_value=1,
+        value=st.session_state.get("w910_gid_value", 1),
+        step=1,
+        key="w910_gid_input",
+    )
+    if st.button("상세 히스토리 검색", key="w910_gid_query"):
+        runs = query_simulation_by_grid_string_id(int(gid_input))
+        runs = [r for r in runs if (r.get("run_meta") or {}).get("hypothesis_key") == hypothesis_key]
+        st.session_state["w910_gid_results"] = runs
+        st.session_state["w910_gid_value"] = int(gid_input)
+
+    if "w910_gid_results" in st.session_state and st.session_state.get("w910_gid_value") == gid_input:
+        runs = st.session_state["w910_gid_results"]
+        if not runs:
+            st.info(f"grid_string_id **{gid_input}**에 대한 윈도우 9·10 전용 시뮬레이션 결과가 없습니다.")
+        else:
+            grid_string = get_grid_string_by_id(gid_input)
+            if grid_string:
+                st.markdown("##### Grid String")
+                st.code(grid_string)
+            run_id = runs[0]["run_id"] if len(runs) == 1 else None
+            if run_id is None:
+                opts = [(r["run_id"], f"{r['run_id'][:8]}... | {r.get('run_meta', {}).get('created_at', '')}") for r in runs]
+                idx = st.selectbox("Run 선택", range(len(opts)), format_func=lambda i: opts[i][1], key="w910_run_select")
+                run_id = opts[idx][0]
+            events = query_simulation_step_events(run_id, gid_input)
+            if not events:
+                st.warning("해당 run에 대한 step_events가 없습니다.")
+            else:
+                st.markdown("##### 상세 히스토리")
+                rows = build_history_table_rows(events, is_live=False)
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.caption(f"총 {len(events)}개 스텝 (run_id: {run_id})")
+
+
+def _render_window910_consecutive_failure_tab():
+    """윈도우 9·10 전용 가설(first_anchor_window9_10) 결과만 조회 · 연속 불일치 통계 및 상위 10개 스트링 + grid_string_id 상세 조회."""
+    st.markdown("### 윈도우 9·10 전용 · 연속 불일치")
+    st.caption("가설 `first_anchor_window9_10` 시뮬레이션 결과만 대상으로, 연속 불일치(consecutive failures) 통계와 연속 불일치가 가장 많은 스트링 상위 10건을 표시합니다.")
+
+    hypothesis_key = "first_anchor_window9_10"
+
+    stats = query_simulation_consecutive_failure_stats(hypothesis_key)
+    total = stats.get("total_grid_results", 0)
+    if total == 0:
+        st.info("해당 가설의 시뮬레이션 결과가 없습니다. (hypothesis_key: first_anchor_window9_10)")
+        return
+
+    st.markdown("#### 연속 불일치 통계")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.metric("총 Grid Result 수", total)
+    with c2:
+        st.metric("평균 연속 불일치(최대)", f"{stats.get('avg_max_consecutive_failures', 0):.2f}회")
+    with c3:
+        st.metric("최악 연속 불일치", f"{stats.get('worst_max_consecutive_failures', 0)}회")
+    with c4:
+        st.metric("평균 정확도", f"{stats.get('avg_accuracy_overall', 0):.2f}%")
+    with c5:
+        st.metric("가설", hypothesis_key)
+
+    dist = stats.get("max_consecutive_failures_dist", {})
+    if dist:
+        dist_sorted = sorted(dist.items())
+        labels = [f"{k}회" for k, _ in dist_sorted]
+        values = [v for _, v in dist_sorted]
+        if values:
+            st.bar_chart(pd.DataFrame({"개수": values}, index=labels))
+        st.caption("연속 불일치(최대) 분포 — grid_string 단위")
+
+    st.markdown("#### 연속 불일치가 가장 많은 스트링 (상위 10건)")
+    top_list = query_simulation_high_failure_results(
+        min_max_consecutive_failures=0,
+        limit=10,
+        hypothesis_key=hypothesis_key,
+    )
+    if not top_list:
+        st.info("데이터가 없습니다.")
+    else:
+        table_df = pd.DataFrame([
+            {
+                "run_id": r.get("run_id", ""),
+                "grid_string_id": r.get("grid_string_id"),
+                "최대 연속 불일치": r.get("max_consecutive_failures", 0),
+                "정확도 (%)": f"{r.get('accuracy', 0):.2f}" if r.get("accuracy") is not None else "-",
+                "총 예측": r.get("total_predictions", 0),
+                "스킵": r.get("total_skipped", 0),
+                "실패": r.get("total_failures", 0),
+                "created_at": str(r.get("created_at", ""))[:19] if r.get("created_at") else "-",
+            }
+            for r in top_list
+        ])
+        st.dataframe(table_df, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.markdown("#### grid_string_id로 상세 히스토리 조회")
+    gid_input = st.number_input(
+        "Grid String ID",
+        min_value=1,
+        value=st.session_state.get("w910_fail_gid_value", 1),
+        step=1,
+        key="w910_fail_gid_input",
+    )
+    if st.button("상세 히스토리 검색", key="w910_fail_gid_query"):
+        runs = query_simulation_by_grid_string_id(int(gid_input))
+        runs = [r for r in runs if (r.get("run_meta") or {}).get("hypothesis_key") == hypothesis_key]
+        st.session_state["w910_fail_gid_results"] = runs
+        st.session_state["w910_fail_gid_value"] = int(gid_input)
+
+    if "w910_fail_gid_results" in st.session_state and st.session_state.get("w910_fail_gid_value") == gid_input:
+        runs = st.session_state["w910_fail_gid_results"]
+        if not runs:
+            st.info(f"grid_string_id **{gid_input}**에 대한 윈도우 9·10 전용 시뮬레이션 결과가 없습니다.")
+        else:
+            grid_string = get_grid_string_by_id(gid_input)
+            if grid_string:
+                st.markdown("##### Grid String")
+                st.code(grid_string)
+            run_id = runs[0]["run_id"] if len(runs) == 1 else None
+            if run_id is None:
+                opts = [(r["run_id"], f"{r['run_id'][:8]}... | {r.get('run_meta', {}).get('created_at', '')}") for r in runs]
+                idx = st.selectbox("Run 선택", range(len(opts)), format_func=lambda i: opts[i][1], key="w910_fail_run_select")
+                run_id = opts[idx][0]
+            events = query_simulation_step_events(run_id, gid_input)
+            if not events:
+                st.warning("해당 run에 대한 step_events가 없습니다.")
+            else:
+                st.markdown("##### 상세 히스토리")
+                rows = build_history_table_rows(events, is_live=False)
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.caption(f"총 {len(events)}개 스텝 (run_id: {run_id})")
+
+
 def _render_prediction_table_confidence_section():
     """예측 테이블(simulation_predictions_change_point) 신뢰도 섹션. 하단 탭으로 요약/prefix별 상세."""
     window_sizes = (9, 10, 11)
@@ -556,6 +757,7 @@ def _render_prediction_confidence_summary(window_sizes):
         "최소 신뢰도 (%)": (df["min_confidence"].round(2)),
         "최대 신뢰도 (%)": (df["max_confidence"].round(2)),
     })
+    display_df.insert(0, "No", range(1, len(display_df) + 1))
     st.dataframe(display_df, use_container_width=True, hide_index=True)
     st.caption(f"총 {len(display_df)}개 (메소드×윈도우) 조합 · 윈도우: {window_sizes}")
 
@@ -649,6 +851,7 @@ def _render_prediction_prefix_method_comparison(window_sizes):
         # 윈도우 컬럼은 동일값이므로 숨겨도 됨 (선택 시 제거하면 테이블 간결)
         display_df = display_df.drop(columns=["윈도우"])
 
+    display_df.insert(0, "No", range(1, len(display_df) + 1))
     st.dataframe(display_df, use_container_width=True, hide_index=True)
     caption_ws = f"윈도우 {ws_value}" if ws_value != "전체" else f"윈도우: {window_sizes}"
     st.caption(
@@ -723,6 +926,7 @@ def _render_prediction_prefix_detail(window_sizes):
         display_df = display_df.drop(columns=drop_cols)
     else:
         display_df["시뮬레이션 승률(%)"] = "-"
+    display_df.insert(0, "No", range(1, len(display_df) + 1))
     st.dataframe(display_df, use_container_width=True, hide_index=True)
     st.caption(f"총 {len(display_df):,}개 레코드 · 윈도우: {window_sizes}")
 

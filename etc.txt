@@ -234,3 +234,12 @@ v3 시뮬레이션 설정
 이 설정과 상관없이 
 의도한 규칙대로 시뮬레이션이 작동하는건지 파악해줘 
 v3 규칙에서 가중치 기반 신뢰도는 사용하지 않아 
+
+
+3452
+
+pppbpbbppbpppbppbbbbbpbpbbbbbbpbbbbpbppppbppbpbpbbppbbppbpbppppbbpp
+
+
+52 
+

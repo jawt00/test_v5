@@ -100,6 +100,19 @@ def init_results_schema(conn):
     cur.execute("CREATE INDEX IF NOT EXISTS idx_step_events_run_gid ON step_events(run_id, grid_string_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_step_events_run_anchor ON step_events(run_id, anchor)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_step_events_run_window ON step_events(run_id, window_size)")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS run_prefix_win_rate (
+            run_id TEXT NOT NULL,
+            window_size INTEGER NOT NULL,
+            prefix TEXT NOT NULL,
+            total INTEGER NOT NULL,
+            correct INTEGER NOT NULL,
+            win_rate_pct REAL NOT NULL,
+            PRIMARY KEY (run_id, window_size, prefix),
+            FOREIGN KEY (run_id) REFERENCES runs(run_id)
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_run_prefix_win_rate_run_id ON run_prefix_win_rate(run_id)")
     conn.commit()
 
 
@@ -381,6 +394,64 @@ def insert_step_events(conn, run_id, results):
             )
 
 
+def _compute_run_prefix_win_rate_aggregates(results):
+    """
+    results의 history에서 (window_size, prefix)별 total·correct 집계.
+    skipped=True인 스텝 제외. 메소드 구분 없이 하나의 승률용 집계.
+
+    Returns:
+        list of dict: [{"window_size", "prefix", "total", "correct", "win_rate_pct"}, ...]
+    """
+    aggregated = {}
+    for r in results:
+        for entry in r.get("history") or []:
+            if entry.get("skipped"):
+                continue
+            ws = entry.get("window_size")
+            prefix = entry.get("prefix", "")
+            if ws is None:
+                continue
+            key = (ws, prefix)
+            if key not in aggregated:
+                aggregated[key] = {"total": 0, "correct": 0}
+            aggregated[key]["total"] += 1
+            if entry.get("is_correct") is True or entry.get("is_correct") == 1:
+                aggregated[key]["correct"] += 1
+    out = []
+    for (ws, prefix), v in aggregated.items():
+        total = v["total"]
+        correct = v["correct"]
+        win_rate_pct = 100.0 * correct / total if total > 0 else 0.0
+        out.append({
+            "window_size": ws,
+            "prefix": prefix,
+            "total": total,
+            "correct": correct,
+            "win_rate_pct": win_rate_pct,
+        })
+    return out
+
+
+def insert_run_prefix_win_rate(conn, run_id, results):
+    """run 저장 시 시뮬레이션 승률을 (window_size, prefix)별로 계산해 run_prefix_win_rate에 삽입. 메소드 구분 없음."""
+    rows = _compute_run_prefix_win_rate_aggregates(results)
+    for row in rows:
+        conn.execute(
+            """
+            INSERT INTO run_prefix_win_rate (run_id, window_size, prefix, total, correct, win_rate_pct)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                row["window_size"],
+                row["prefix"],
+                row["total"],
+                row["correct"],
+                row["win_rate_pct"],
+            ),
+        )
+
+
 def _max_consecutive_failures_from_history(history):
     """히스토리에서 연속 불일치 최대 횟수 계산."""
     max_f = 0
@@ -566,6 +637,7 @@ def save_run_results(run_meta, results, summary, db_path=None):
     - results: list of dict (grid_string_id, accuracy, max_consecutive_failures, total_steps, total_failures, total_predictions, total_skipped, stopped_early, history)
     - summary: total_grid_strings, avg_accuracy, max_consecutive_failures, avg_max_consecutive_failures, total_steps, total_failures, total_predictions, total_skipped
     - 개별 스트링 상세 히스토리(history)가 없으면 저장하지 않고 ValueError.
+    - 시뮬레이션 승률: (window_size, prefix)별로 history에서 계산해 run_prefix_win_rate 테이블에 저장(메소드 구분 없음).
 
     Returns:
         str: run_id
@@ -597,6 +669,7 @@ def save_run_results(run_meta, results, summary, db_path=None):
         insert_run_summary(conn, run_id, summary)
         insert_grid_results(conn, run_id, results)
         insert_step_events(conn, run_id, results)
+        insert_run_prefix_win_rate(conn, run_id, results)
         conn.commit()
         return run_id
     except Exception:
@@ -688,6 +761,38 @@ def query_simulation_step_events(run_id, grid_string_id, db_path=None):
             params=[run_id, grid_string_id],
         )
         return df.to_dict("records") if len(df) > 0 else []
+    finally:
+        conn.close()
+
+
+def query_aggregated_prefix_win_rate(window_sizes, db_path=None):
+    """
+    run_prefix_win_rate 테이블에서 (window_size, prefix)별 시뮬레이션 승률 집계.
+    여러 run을 합쳐 sum(correct)/sum(total)*100 반환.
+
+    Returns:
+        dict: (window_size, prefix) -> win_rate_pct (float). 키는 (int, str) 튜플.
+    """
+    conn = get_results_db_connection(db_path)
+    try:
+        init_results_schema(conn)
+        placeholders = ",".join("?" * len(window_sizes))
+        q = """
+            SELECT window_size, prefix,
+                   SUM(correct) AS total_correct,
+                   SUM(total) AS total_count
+            FROM run_prefix_win_rate
+            WHERE window_size IN ({})
+            GROUP BY window_size, prefix
+        """.format(placeholders)
+        df = __import__("pandas").read_sql_query(q, conn, params=list(window_sizes))
+        out = {}
+        for _, r in df.iterrows():
+            tc = r.get("total_correct") or 0
+            tn = r.get("total_count") or 0
+            pct = 100.0 * tc / tn if tn > 0 else 0.0
+            out[(int(r["window_size"]), str(r["prefix"]))] = pct
+        return out
     finally:
         conn.close()
 

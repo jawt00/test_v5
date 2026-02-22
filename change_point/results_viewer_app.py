@@ -60,8 +60,221 @@ def _format_predicted_display(entry, is_live=False):
     return str(predicted) if predicted else "-"
 
 
-def build_history_table_rows(events, is_live=False):
-    """step_events 또는 live_step_events를 테이블 행 리스트로 변환."""
+def _normalize_ws_prefix(ws, prefix):
+    """(window_size, prefix) 키 정규화: 조회·매칭 시 동일하게 사용."""
+    if ws is None:
+        return None
+    p = str(prefix).strip() if prefix is not None else ""
+    return (int(ws), p)
+
+
+def query_sim_win_rate_from_predictions_table(events):
+    """
+    events에 등장하는 (window_size, prefix)에 대해
+    simulation_predictions_change_point 테이블의 sim_win_rate_pct(빈도 기반, threshold=0) 조회.
+    Returns:
+        dict: (window_size, prefix) -> 시뮬레이션 승률(%) 표시 문자열. 키는 _normalize_ws_prefix와 동일.
+    """
+    if not events:
+        return {}
+    keys = set()
+    for e in events:
+        k = _normalize_ws_prefix(e.get("window_size"), e.get("prefix", ""))
+        if k is not None:
+            keys.add(k)
+    if not keys:
+        return {}
+    conn = get_change_point_db_connection()
+    try:
+        cur = conn.execute(
+            "PRAGMA table_info(simulation_predictions_change_point)"
+        )
+        cols = [row[1] for row in cur.fetchall()]
+        if "sim_win_rate_pct" not in cols:
+            return {}
+        df = pd.read_sql_query(
+            """
+            SELECT window_size, prefix, sim_win_rate_pct
+            FROM simulation_predictions_change_point
+            WHERE method = '빈도 기반' AND threshold = 0
+            """,
+            conn,
+        )
+        out = {}
+        for _, r in df.iterrows():
+            k = _normalize_ws_prefix(r.get("window_size"), r.get("prefix"))
+            if k is not None and k in keys:
+                v = r.get("sim_win_rate_pct")
+                if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                    out[k] = f"{float(v):.1f}%"
+                else:
+                    out[k] = "-"
+        return out
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+
+def query_sim_win_rate_numeric_from_predictions_table(events):
+    """
+    events에 등장하는 (window_size, prefix)에 대해
+    simulation_predictions_change_point의 sim_win_rate_pct 수치 조회 (필터/비교용).
+    Returns:
+        dict: (window_size, prefix) -> float (승률 %) 또는 None. 키는 _normalize_ws_prefix와 동일.
+    """
+    if not events:
+        return {}
+    keys = set()
+    for e in events:
+        k = _normalize_ws_prefix(e.get("window_size"), e.get("prefix", ""))
+        if k is not None:
+            keys.add(k)
+    if not keys:
+        return {}
+    conn = get_change_point_db_connection()
+    try:
+        cur = conn.execute(
+            "PRAGMA table_info(simulation_predictions_change_point)"
+        )
+        cols = [row[1] for row in cur.fetchall()]
+        if "sim_win_rate_pct" not in cols:
+            return {}
+        df = pd.read_sql_query(
+            """
+            SELECT window_size, prefix, sim_win_rate_pct
+            FROM simulation_predictions_change_point
+            WHERE method = '빈도 기반' AND threshold = 0
+            """,
+            conn,
+        )
+        out = {}
+        for _, r in df.iterrows():
+            k = _normalize_ws_prefix(r.get("window_size"), r.get("prefix"))
+            if k is not None and k in keys:
+                v = r.get("sim_win_rate_pct")
+                if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                    out[k] = float(v)
+                else:
+                    out[k] = None
+        return out
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+
+def filter_events_by_sim_win_rate(events, win_rate_numeric_map, min_pct):
+    """시뮬레이션 승률이 min_pct 이상인 스텝만 반환. win_rate_numeric_map에 없거나 None이면 제외."""
+    if not win_rate_numeric_map or min_pct is None or min_pct <= 0:
+        return list(events) if events else []
+    out = []
+    for e in events or []:
+        k = _normalize_ws_prefix(e.get("window_size"), e.get("prefix", ""))
+        if k is None:
+            continue
+        v = win_rate_numeric_map.get(k)
+        if v is not None and v >= min_pct:
+            out.append(e)
+    return out
+
+
+def filter_events_by_sim_win_rate_per_window(events, win_rate_numeric_map, min_pct_w9, min_pct_w10):
+    """
+    윈도우별 시뮬레이션 승률 기준 적용.
+    - window_size==9: min_pct_w9 이상인 스텝만 포함. 0이면 필터 없음(전체 포함).
+    - window_size==10: min_pct_w10 이상인 스텝만 포함. 0이면 필터 없음(전체 포함).
+    - 그 외 윈도우: 필터 없이 포함.
+    """
+    if not win_rate_numeric_map:
+        return list(events) if events else []
+    out = []
+    for e in events or []:
+        ws = e.get("window_size")
+        k = _normalize_ws_prefix(ws, e.get("prefix", ""))
+        if k is None:
+            continue
+        v = win_rate_numeric_map.get(k)
+        if v is None:
+            continue
+        if ws == 9:
+            if min_pct_w9 is not None and min_pct_w9 > 0 and v < min_pct_w9:
+                continue
+        elif ws == 10:
+            if min_pct_w10 is not None and min_pct_w10 > 0 and v < min_pct_w10:
+                continue
+        out.append(e)
+    return out
+
+
+def filter_events_by_w9_w10_pairs(events, win_rate_numeric_map, min_pct_w9):
+    """
+    (윈도우9, 윈도우10) 쌍 단위 필터. events는 ORDER BY step으로 윈도우9→윈도우10 순서 가정.
+    - 윈도우9 승률 >= min_pct_w9 이면 해당 쌍(윈도우9+윈도우10) 전부 포함.
+    - 미만이면 해당 쌍 전부 제외. min_pct_w9가 0이면 필터 없이 전체 포함.
+    """
+    if not events:
+        return []
+    if min_pct_w9 is None or min_pct_w9 <= 0:
+        return list(events)
+    if not win_rate_numeric_map:
+        return []
+    out = []
+    i = 0
+    while i + 1 < len(events):
+        e9 = events[i]
+        e10 = events[i + 1]
+        if e9.get("window_size") != 9 or e10.get("window_size") != 10:
+            i += 1
+            continue
+        k = _normalize_ws_prefix(9, e9.get("prefix", ""))
+        if k is None:
+            i += 2
+            continue
+        v = win_rate_numeric_map.get(k)
+        if v is not None and v >= min_pct_w9:
+            out.append(e9)
+            out.append(e10)
+        i += 2
+    return out
+
+
+def compute_stats_from_step_events(events):
+    """
+    step_events 리스트에서 통계 계산 (스킵 제외한 예측만 사용).
+    Returns:
+        dict: total_steps, total_predictions, total_failures, total_skipped, accuracy, max_consecutive_failures
+    """
+    total_steps = len(events) if events else 0
+    predictions = 0
+    failures = 0
+    skipped = 0
+    max_consec = 0
+    cur_consec = 0
+    for e in events or []:
+        if e.get("skipped"):
+            skipped += 1
+            continue
+        predictions += 1
+        if e.get("is_correct") is False or e.get("is_correct") == 0:
+            failures += 1
+            cur_consec += 1
+            max_consec = max(max_consec, cur_consec)
+        else:
+            cur_consec = 0
+    acc = (100.0 * (predictions - failures) / predictions) if predictions > 0 else 0.0
+    return {
+        "total_steps": total_steps,
+        "total_predictions": predictions,
+        "total_failures": failures,
+        "total_skipped": skipped,
+        "accuracy": acc,
+        "max_consecutive_failures": max_consec,
+    }
+
+
+def build_history_table_rows(events, is_live=False, sim_win_rate_map=None):
+    """step_events 또는 live_step_events를 테이블 행 리스트로 변환. 시뮬레이션일 때 예측 테이블의 시뮬레이션 승률 표시."""
     rows = []
     for e in events or []:
         is_correct = e.get("is_correct")
@@ -84,6 +297,8 @@ def build_history_table_rows(events, is_live=False):
         }
         if not is_live:
             row["선택 윈도우"] = e.get("selected_window_size", "")
+            k = _normalize_ws_prefix(e.get("window_size"), e.get("prefix", ""))
+            row["시뮬레이션 승률"] = (sim_win_rate_map.get(k, "-") if sim_win_rate_map and k else "-")
         rows.append(row)
     return rows
 
@@ -186,12 +401,13 @@ def main():
     st.markdown("통계, 연속 불일치 높은 결과 파악, 상세 히스토리 조회")
     st.markdown("---")
 
-    t1, t2, t3, t4, t5 = st.tabs([
+    t1, t2, t3, t4, t5, t6 = st.tabs([
         "연속 불일치 높은 결과",
         "통계 대시보드",
         "상세 조회",
         "윈도우 9·10 전용 · 연속 일치",
         "윈도우 9·10 전용 · 연속 불일치",
+        "승률 기준 결과 조회",
     ])
 
     with t1:
@@ -204,6 +420,8 @@ def main():
         _render_window910_consecutive_match_tab()
     with t5:
         _render_window910_consecutive_failure_tab()
+    with t6:
+        _render_win_rate_filter_tab()
 
     st.markdown("---")
     st.markdown("## 예측 테이블 신뢰도")
@@ -498,9 +716,45 @@ def _render_detail_tab():
 
             if events:
                 st.markdown("#### 상세 히스토리")
-                rows = build_history_table_rows(events, is_live=is_live)
+                sim_win_rate_map = query_sim_win_rate_from_predictions_table(events) if not is_live else None
+                rows = build_history_table_rows(events, is_live=is_live, sim_win_rate_map=sim_win_rate_map)
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
                 st.caption(f"총 {len(events)}개 스텝")
+
+                if not is_live:
+                    st.markdown("#### 시뮬레이션 승률 기준 필터")
+                    min_win_rate = st.number_input(
+                        "승률 기준 (%) 이상인 스텝만 사용",
+                        min_value=0,
+                        max_value=100,
+                        value=0,
+                        step=1,
+                        key="dt_win_rate_filter",
+                        help="예측 테이블에 저장된 (window_size, prefix)별 시뮬레이션 승률이 이 값 이상인 스텝만 통계·테이블에 반영",
+                    )
+                    if min_win_rate > 0:
+                        win_rate_numeric = query_sim_win_rate_numeric_from_predictions_table(events)
+                        filtered = filter_events_by_sim_win_rate(events, win_rate_numeric, min_win_rate)
+                        if filtered:
+                            st.markdown(f"**필터 적용 통계** (승률 {min_win_rate}% 이상 스텝만, {len(filtered)}개)")
+                            fstats = compute_stats_from_step_events(filtered)
+                            fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+                            with fc1:
+                                st.metric("필터된 스텝 수", len(filtered))
+                            with fc2:
+                                st.metric("최대 연속 불일치", fstats["max_consecutive_failures"])
+                            with fc3:
+                                st.metric("정확도", f"{fstats['accuracy']:.2f}%")
+                            with fc4:
+                                st.metric("총 예측", fstats["total_predictions"])
+                            with fc5:
+                                st.metric("총 실패", fstats["total_failures"])
+                            st.markdown("##### 필터된 상세 히스토리")
+                            f_map = query_sim_win_rate_from_predictions_table(filtered)
+                            f_rows = build_history_table_rows(filtered, is_live=False, sim_win_rate_map=f_map)
+                            st.dataframe(pd.DataFrame(f_rows), use_container_width=True, hide_index=True)
+                        else:
+                            st.info(f"승률 **{min_win_rate}%** 이상인 스텝이 없습니다. (예측 테이블의 시뮬레이션 승률 기준)")
 
     # grid_string_id 직접 조회 모드
     st.markdown("---")
@@ -528,8 +782,40 @@ def _render_detail_tab():
             st.metric("정확도", f"{gr.get('accuracy', 0):.2f}%")
             events = query_simulation_step_events(selected_run_id, gid_input)
             if events:
-                rows = build_history_table_rows(events, is_live=False)
+                sim_win_rate_map = query_sim_win_rate_from_predictions_table(events)
+                rows = build_history_table_rows(events, is_live=False, sim_win_rate_map=sim_win_rate_map)
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.markdown("##### 시뮬레이션 승률 기준 필터")
+                min_win_rate_gid = st.number_input(
+                    "승률 기준 (%) 이상인 스텝만",
+                    min_value=0,
+                    max_value=100,
+                    value=0,
+                    step=1,
+                    key="dt_gid_win_rate_filter",
+                )
+                if min_win_rate_gid > 0:
+                    win_rate_numeric = query_sim_win_rate_numeric_from_predictions_table(events)
+                    filtered = filter_events_by_sim_win_rate(events, win_rate_numeric, min_win_rate_gid)
+                    if filtered:
+                        st.markdown(f"**필터 적용 통계** (승률 {min_win_rate_gid}% 이상, {len(filtered)}개 스텝)")
+                        fstats = compute_stats_from_step_events(filtered)
+                        fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+                        with fc1:
+                            st.metric("필터된 스텝 수", len(filtered))
+                        with fc2:
+                            st.metric("최대 연속 불일치", fstats["max_consecutive_failures"])
+                        with fc3:
+                            st.metric("정확도", f"{fstats['accuracy']:.2f}%")
+                        with fc4:
+                            st.metric("총 예측", fstats["total_predictions"])
+                        with fc5:
+                            st.metric("총 실패", fstats["total_failures"])
+                        f_map = query_sim_win_rate_from_predictions_table(filtered)
+                        f_rows = build_history_table_rows(filtered, is_live=False, sim_win_rate_map=f_map)
+                        st.dataframe(pd.DataFrame(f_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info(f"승률 {min_win_rate_gid}% 이상인 스텝이 없습니다.")
 
 
 def _render_window910_consecutive_match_tab():
@@ -621,9 +907,41 @@ def _render_window910_consecutive_match_tab():
                 st.warning("해당 run에 대한 step_events가 없습니다.")
             else:
                 st.markdown("##### 상세 히스토리")
-                rows = build_history_table_rows(events, is_live=False)
+                sim_win_rate_map = query_sim_win_rate_from_predictions_table(events)
+                rows = build_history_table_rows(events, is_live=False, sim_win_rate_map=sim_win_rate_map)
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
                 st.caption(f"총 {len(events)}개 스텝 (run_id: {run_id})")
+                st.markdown("##### 시뮬레이션 승률 기준 필터")
+                min_win_rate_w910 = st.number_input(
+                    "승률 기준 (%) 이상인 스텝만",
+                    min_value=0,
+                    max_value=100,
+                    value=0,
+                    step=1,
+                    key="w910_match_win_rate_filter",
+                )
+                if min_win_rate_w910 > 0:
+                    win_rate_numeric = query_sim_win_rate_numeric_from_predictions_table(events)
+                    filtered = filter_events_by_sim_win_rate(events, win_rate_numeric, min_win_rate_w910)
+                    if filtered:
+                        st.markdown(f"**필터 적용 통계** (승률 {min_win_rate_w910}% 이상, {len(filtered)}개 스텝)")
+                        fstats = compute_stats_from_step_events(filtered)
+                        fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+                        with fc1:
+                            st.metric("필터된 스텝 수", len(filtered))
+                        with fc2:
+                            st.metric("최대 연속 불일치", fstats["max_consecutive_failures"])
+                        with fc3:
+                            st.metric("정확도", f"{fstats['accuracy']:.2f}%")
+                        with fc4:
+                            st.metric("총 예측", fstats["total_predictions"])
+                        with fc5:
+                            st.metric("총 실패", fstats["total_failures"])
+                        f_map = query_sim_win_rate_from_predictions_table(filtered)
+                        f_rows = build_history_table_rows(filtered, is_live=False, sim_win_rate_map=f_map)
+                        st.dataframe(pd.DataFrame(f_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info(f"승률 {min_win_rate_w910}% 이상인 스텝이 없습니다.")
 
 
 def _render_window910_consecutive_failure_tab():
@@ -719,9 +1037,221 @@ def _render_window910_consecutive_failure_tab():
                 st.warning("해당 run에 대한 step_events가 없습니다.")
             else:
                 st.markdown("##### 상세 히스토리")
-                rows = build_history_table_rows(events, is_live=False)
+                sim_win_rate_map = query_sim_win_rate_from_predictions_table(events)
+                rows = build_history_table_rows(events, is_live=False, sim_win_rate_map=sim_win_rate_map)
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
                 st.caption(f"총 {len(events)}개 스텝 (run_id: {run_id})")
+                st.markdown("##### 시뮬레이션 승률 기준 필터")
+                min_win_rate_fail = st.number_input(
+                    "승률 기준 (%) 이상인 스텝만",
+                    min_value=0,
+                    max_value=100,
+                    value=0,
+                    step=1,
+                    key="w910_fail_win_rate_filter",
+                )
+                if min_win_rate_fail > 0:
+                    win_rate_numeric = query_sim_win_rate_numeric_from_predictions_table(events)
+                    filtered = filter_events_by_sim_win_rate(events, win_rate_numeric, min_win_rate_fail)
+                    if filtered:
+                        st.markdown(f"**필터 적용 통계** (승률 {min_win_rate_fail}% 이상, {len(filtered)}개 스텝)")
+                        fstats = compute_stats_from_step_events(filtered)
+                        fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+                        with fc1:
+                            st.metric("필터된 스텝 수", len(filtered))
+                        with fc2:
+                            st.metric("최대 연속 불일치", fstats["max_consecutive_failures"])
+                        with fc3:
+                            st.metric("정확도", f"{fstats['accuracy']:.2f}%")
+                        with fc4:
+                            st.metric("총 예측", fstats["total_predictions"])
+                        with fc5:
+                            st.metric("총 실패", fstats["total_failures"])
+                        f_map = query_sim_win_rate_from_predictions_table(filtered)
+                        f_rows = build_history_table_rows(filtered, is_live=False, sim_win_rate_map=f_map)
+                        st.dataframe(pd.DataFrame(f_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info(f"승률 {min_win_rate_fail}% 이상인 스텝이 없습니다.")
+
+
+def _render_win_rate_filter_tab():
+    """
+    시나리오: 1) 시뮬레이션 승률 기준 설정 → 2) 결과 조회 → 3) 전체 스트링별 스텝을 해당 기준으로 필터링 → 4) 통계 요약 표시
+    """
+    st.markdown("### 승률 기준 결과 조회")
+    st.caption("(윈도우9, 윈도우10) 쌍 단위: 윈도우9가 기준 이상이면 해당 쌍만 포함하고, 윈도우9 충족 시 해당 쌍의 윈도우10은 무조건 포함.")
+
+    min_win_rate_w9 = st.number_input(
+        "1. 윈도우 9 승률 기준 (%)",
+        min_value=0,
+        max_value=100,
+        value=56,
+        step=1,
+        key="wr_filter_min_pct_w9",
+        help="윈도우9가 이 값 이상인 (윈도우9, 윈도우10) 쌍만 포함. 윈도우9 충족 시 해당 쌍의 윈도우10은 무조건 포함. 0이면 필터 없이 전체 포함.",
+    )
+    hyp_keys = [None] + query_simulation_hypothesis_keys()
+    default_hyp_idx = hyp_keys.index("first_anchor_window9_10") if "first_anchor_window9_10" in hyp_keys else 0
+    hyp_idx = st.selectbox(
+        "2. 가설 필터",
+        range(len(hyp_keys)),
+        format_func=lambda i: "전체" if hyp_keys[i] is None else hyp_keys[i],
+        index=default_hyp_idx,
+        key="wr_filter_hyp",
+    )
+    hypothesis_key = hyp_keys[hyp_idx]
+    run_limit_input = st.number_input(
+        "최근 Run 개수 (0 = 전체)",
+        min_value=0,
+        max_value=500,
+        value=0,
+        step=1,
+        key="wr_filter_run_limit",
+        help="0이면 조건에 맞는 run 전체를 조회합니다.",
+    )
+    run_limit = int(run_limit_input) if run_limit_input and run_limit_input > 0 else 9999
+
+    if st.button("3. 결과 조회", key="wr_filter_query", type="primary"):
+        if min_win_rate_w9 is None or min_win_rate_w9 < 0:
+            st.warning("승률 기준을 0 이상으로 설정하세요.")
+        else:
+            runs = query_simulation_runs_list(limit=min(run_limit, 2000))
+            if hypothesis_key:
+                runs = [r for r in runs if r.get("hypothesis_key") == hypothesis_key]
+            runs = runs[:run_limit]
+            if not runs:
+                st.info("조건에 맞는 run이 없습니다.")
+            else:
+                rows = []
+                with st.status("스트링별 스텝 필터링 및 통계 계산 중...") as status:
+                    for run in runs:
+                        run_id = run.get("run_id")
+                        detail = query_simulation_run_detail(run_id)
+                        if not detail or not detail.get("grid_results"):
+                            continue
+                        for gr in detail["grid_results"]:
+                            gid = gr.get("grid_string_id")
+                            events = query_simulation_step_events(run_id, gid)
+                            if not events:
+                                continue
+                            win_rate_numeric = query_sim_win_rate_numeric_from_predictions_table(events)
+                            filtered = filter_events_by_w9_w10_pairs(
+                                events, win_rate_numeric, min_win_rate_w9
+                            )
+                            if not filtered:
+                                rows.append({
+                                    "run_id": run_id[:8] + "…",
+                                    "run_id_full": run_id,
+                                    "grid_string_id": gid,
+                                    "원본 스텝 수": len(events),
+                                    "필터된 스텝 수": 0,
+                                    "최대 연속 불일치": 0,
+                                    "정확도 (%)": "-",
+                                    "총 예측": 0,
+                                    "총 실패": 0,
+                                })
+                                continue
+                            fstats = compute_stats_from_step_events(filtered)
+                            rows.append({
+                                "run_id": run_id[:8] + "…",
+                                "run_id_full": run_id,
+                                "grid_string_id": gid,
+                                "원본 스텝 수": len(events),
+                                "필터된 스텝 수": len(filtered),
+                                "최대 연속 불일치": fstats["max_consecutive_failures"],
+                                "정확도 (%)": f"{fstats['accuracy']:.2f}",
+                                "총 예측": fstats["total_predictions"],
+                                "총 실패": fstats["total_failures"],
+                            })
+                    status.update(label="완료", state="complete")
+                st.session_state["wr_filter_rows"] = rows
+                st.session_state["wr_filter_min_pct_w9_used"] = min_win_rate_w9
+                st.rerun()
+
+    if "wr_filter_rows" in st.session_state:
+        rows = st.session_state["wr_filter_rows"]
+        used_w9 = st.session_state.get("wr_filter_min_pct_w9_used", 56)
+        filter_label = f"윈도우 9 {used_w9}% 이상인 쌍만 (윈도우10은 선행 윈도우9 충족 시 포함)" if used_w9 and used_w9 > 0 else "필터 없음 (전체)"
+        st.markdown(f"#### 4. 통계 요약 (**{filter_label}**)")
+
+        if not rows:
+            st.info("필터된 결과가 없습니다.")
+        else:
+            df = pd.DataFrame(rows)
+            total_grids = len(df)
+            filtered_nonzero = df[df["필터된 스텝 수"] > 0]
+            if len(filtered_nonzero) == 0:
+                st.warning("승률 기준 이상인 스텝이 하나도 없는 스트링만 있습니다.")
+            else:
+                count_max_fail_0 = int((filtered_nonzero["최대 연속 불일치"] == 0).sum())
+                c1, c2, c3, c4, c5, c6 = st.columns(6)
+                with c1:
+                    st.metric("총 Grid 수", total_grids)
+                with c2:
+                    st.metric("필터 적용된 Grid 수", len(filtered_nonzero))
+                with c3:
+                    acc_series = pd.to_numeric(filtered_nonzero["정확도 (%)"], errors="coerce")
+                    avg_acc = acc_series.mean()
+                    st.metric("평균 정확도 (%)", f"{avg_acc:.2f}" if not pd.isna(avg_acc) else "-")
+                with c4:
+                    worst = int(filtered_nonzero["최대 연속 불일치"].max())
+                    st.metric("최악 최대 연속 불일치", worst)
+                with c5:
+                    st.metric("최대 연속 불일치 0인 케이스", count_max_fail_0)
+                with c6:
+                    wr_criterion = f"W9 {used_w9}% 이상 쌍" if used_w9 and used_w9 > 0 else "전체"
+                    st.metric("승률 기준", wr_criterion)
+
+                dist = filtered_nonzero["최대 연속 불일치"].value_counts().sort_index()
+                if len(dist) > 0:
+                    st.bar_chart(pd.DataFrame({"개수": dist}), use_container_width=True)
+                    st.caption("최대 연속 불일치 분포 (승률 기준 적용 스트링만)")
+
+            st.markdown("#### 스트링별 결과")
+            display_df = df.drop(columns=["run_id_full"], errors="ignore")
+            total_rows = len(display_df)
+            filtered_count = len(df[df["필터된 스텝 수"] > 0]) if "필터된 스텝 수" in df.columns else total_rows
+            st.caption(f"전체 **{total_rows}**건 (필터 적용된 Grid: **{filtered_count}**건)")
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.markdown("#### grid_string_id로 필터된 상세 히스토리 조회")
+            wr_gid = st.number_input(
+                "Grid String ID",
+                min_value=1,
+                value=st.session_state.get("wr_filter_gid", 1),
+                step=1,
+                key="wr_filter_gid_input",
+            )
+            if st.button("필터된 상세 히스토리 조회", key="wr_filter_gid_btn"):
+                st.session_state["wr_filter_gid"] = int(wr_gid)
+                matches = [r for r in rows if r.get("grid_string_id") == int(wr_gid)]
+                st.session_state["wr_filter_gid_matches"] = matches
+                st.rerun()
+
+            if "wr_filter_gid_matches" in st.session_state and st.session_state.get("wr_filter_gid") == wr_gid:
+                matches = st.session_state["wr_filter_gid_matches"]
+                if not matches:
+                    st.info(f"grid_string_id **{wr_gid}**는 이번 조회 결과에 없습니다.")
+                else:
+                    used_w9 = st.session_state.get("wr_filter_min_pct_w9_used", 56)
+                    run_id_sel = matches[0].get("run_id_full") if len(matches) == 1 else None
+                    if run_id_sel is None:
+                        opts = [(m["run_id_full"], m["run_id"] + " | 필터된 스텝 " + str(m.get("필터된 스텝 수", 0))) for m in matches]
+                        sel_idx = st.selectbox("Run 선택", range(len(opts)), format_func=lambda i: opts[i][1], key="wr_gid_run_sel")
+                        run_id_sel = opts[sel_idx][0]
+                    if run_id_sel:
+                        events = query_simulation_step_events(run_id_sel, int(wr_gid))
+                        win_rate_numeric = query_sim_win_rate_numeric_from_predictions_table(events)
+                        filtered = filter_events_by_w9_w10_pairs(events, win_rate_numeric, used_w9)
+                        if filtered:
+                            pair_label = f"윈도우 9 {used_w9}% 이상인 쌍만" if used_w9 and used_w9 > 0 else "전체"
+                            st.markdown(f"##### 필터된 상세 히스토리 ({pair_label}, {len(filtered)}개 스텝)")
+                            f_map = query_sim_win_rate_from_predictions_table(filtered)
+                            f_rows = build_history_table_rows(filtered, is_live=False, sim_win_rate_map=f_map)
+                            st.dataframe(pd.DataFrame(f_rows), use_container_width=True, hide_index=True)
+                        else:
+                            st.info(f"grid_string_id {wr_gid}에서 조건에 맞는 스텝이 없습니다.")
 
 
 def _render_prediction_table_confidence_section():

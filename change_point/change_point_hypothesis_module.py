@@ -5439,14 +5439,8 @@ def validate_first_anchor_extended_window_v3_live_next_anchor_cp(
 
 def create_simulation_predictions_change_point_table(conn=None):
     """
-    시뮬레이션 전용 예측 테이블 생성.
-    
-    Args:
-        conn: DB 연결. None이면 change_point_ngram.db 사용.
-              격리 DB 사용 시 get_simulation_predictions_db_connection() 전달.
-    
-    Returns:
-        bool: 테이블 생성 성공 여부
+    시뮬레이션 전용 예측 테이블 생성 (기존 테이블 삭제 후 재생성).
+    주의: 기존 데이터가 모두 삭제됩니다. 빈도만 갱신하려면 ensure_simulation_predictions_change_point_table 사용.
     """
     own_conn = False
     if conn is None:
@@ -5454,7 +5448,6 @@ def create_simulation_predictions_change_point_table(conn=None):
         own_conn = True
     cursor = conn.cursor()
     try:
-        # 기존 테이블이 있으면 삭제하고 재생성 (시뮬레이션마다 새로 생성)
         cursor.execute("DROP TABLE IF EXISTS simulation_predictions_change_point")
         cursor.execute("""
             CREATE TABLE simulation_predictions_change_point (
@@ -5468,6 +5461,7 @@ def create_simulation_predictions_change_point_table(conn=None):
                 method TEXT NOT NULL,
                 threshold REAL NOT NULL,
                 pred_frequency REAL,
+                sim_win_rate_pct REAL,
                 created_at TIMESTAMP DEFAULT (datetime('now', '+9 hours')),
                 updated_at TIMESTAMP DEFAULT (datetime('now', '+9 hours')),
                 UNIQUE(window_size, prefix, method, threshold)
@@ -5479,6 +5473,62 @@ def create_simulation_predictions_change_point_table(conn=None):
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_sim_cp_sp_method_threshold ON simulation_predictions_change_point(method, threshold)"
         )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        if own_conn and conn is not None:
+            conn.close()
+
+
+def ensure_simulation_predictions_change_point_table(conn=None):
+    """
+    시뮬레이션 전용 예측 테이블이 존재하는지 확인하고 없으면 생성.
+    기존 테이블은 유지하며, 누락된 컬럼(pred_frequency, sim_win_rate_pct)만 추가.
+    가중치 기반 등 기존 데이터를 덮어쓰지 않음.
+    """
+    own_conn = False
+    if conn is None:
+        conn = get_change_point_db_connection()
+        own_conn = True
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS simulation_predictions_change_point (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                window_size INTEGER NOT NULL,
+                prefix TEXT NOT NULL,
+                predicted_value TEXT,
+                confidence REAL,
+                b_ratio REAL,
+                p_ratio REAL,
+                method TEXT NOT NULL,
+                threshold REAL NOT NULL,
+                pred_frequency REAL,
+                sim_win_rate_pct REAL,
+                created_at TIMESTAMP DEFAULT (datetime('now', '+9 hours')),
+                updated_at TIMESTAMP DEFAULT (datetime('now', '+9 hours')),
+                UNIQUE(window_size, prefix, method, threshold)
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sim_cp_sp_window_prefix ON simulation_predictions_change_point(window_size, prefix)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sim_cp_sp_method_threshold ON simulation_predictions_change_point(method, threshold)"
+        )
+        cursor.execute("PRAGMA table_info(simulation_predictions_change_point)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if "pred_frequency" not in cols:
+            cursor.execute(
+                "ALTER TABLE simulation_predictions_change_point ADD COLUMN pred_frequency REAL"
+            )
+        if "sim_win_rate_pct" not in cols:
+            cursor.execute(
+                "ALTER TABLE simulation_predictions_change_point ADD COLUMN sim_win_rate_pct REAL"
+            )
         conn.commit()
         return True
     except Exception as e:
@@ -5518,23 +5568,25 @@ def save_predictions_to_simulation_table(
     batch_size=1000,
     min_sample_count=15,
     predictions_conn=None,
+    win_rate_map=None,
 ):
     """
-    시뮬레이션 전용 테이블에 예측값 저장
-    
+    시뮬레이션 전용 테이블에 예측값 저장.
+    지정한 methods에 해당하는 행만 INSERT/REPLACE하며, 다른 method 행은 건드리지 않음.
+
     - cutoff 이전(id <= cutoff) grid_string으로만 학습
-    - simulation_predictions_change_point 테이블에 저장 (기존 테이블 수정 없음)
-    
+    - simulation_predictions_change_point 테이블에 저장
+
     Args:
         cutoff_grid_string_id: cutoff ID (이 ID 이전 = 학습 데이터)
         window_sizes: 윈도우 크기 목록
-        methods: 예측 방법 목록
+        methods: 예측 방법 목록 (예: ("빈도 기반",) 만 넣으면 가중치 기반 등 기존 행 유지)
         thresholds: 임계값 목록
         batch_size: 배치 크기
         min_sample_count: 최소 표본 수 필터
         predictions_conn: 예측 저장용 DB 연결. None이면 change_point_ngram.db 사용.
-                         격리 DB 사용 시 get_simulation_predictions_db_connection() 전달.
-        
+        win_rate_map: (window_size, prefix) -> 시뮬레이션 승률(%). None이면 sim_win_rate_pct는 NULL.
+
     Returns:
         dict: 저장 결과 통계
     """
@@ -5567,7 +5619,7 @@ def save_predictions_to_simulation_table(
         updated_records = 0
         unique_prefixes_set = set()
         cursor = pred_conn.cursor()
-        # 기존 테이블에 pred_frequency 컬럼이 없으면 추가 (구 스키마 마이그레이션)
+        # 기존 테이블에 pred_frequency, sim_win_rate_pct 컬럼이 없으면 추가 (구 스키마 마이그레이션)
         cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='simulation_predictions_change_point'"
         )
@@ -5578,7 +5630,11 @@ def save_predictions_to_simulation_table(
                 cursor.execute(
                     "ALTER TABLE simulation_predictions_change_point ADD COLUMN pred_frequency REAL"
                 )
-                pred_conn.commit()
+            if "sim_win_rate_pct" not in cols:
+                cursor.execute(
+                    "ALTER TABLE simulation_predictions_change_point ADD COLUMN sim_win_rate_pct REAL"
+                )
+            pred_conn.commit()
 
         for window_size in window_sizes:
             train_ngrams = load_ngram_chunks_change_point(window_size=window_size, grid_string_ids=historical_ids)
@@ -5608,6 +5664,7 @@ def save_predictions_to_simulation_table(
                 for prefix in all_prefixes:
                     unique_prefixes_set.add((window_size, prefix))
                     pred_freq = sum(model[prefix].values()) if prefix in model and model[prefix] else None
+                    sim_wr = (win_rate_map.get((window_size, prefix)) if win_rate_map else None)
                     for threshold in thresholds:
                         if threshold == 0:
                             res = predict_for_prefix(model, prefix, method)
@@ -5618,7 +5675,7 @@ def save_predictions_to_simulation_table(
                         ratios = res.get("ratios", {})
                         b_ratio = ratios.get("b", 0.0)
                         p_ratio = ratios.get("p", 0.0)
-                        batch_data.append((window_size, prefix, pred, conf, b_ratio, p_ratio, method, threshold, pred_freq))
+                        batch_data.append((window_size, prefix, pred, conf, b_ratio, p_ratio, method, threshold, pred_freq, sim_wr))
 
                 for i in range(0, len(batch_data), batch_size):
                     batch = batch_data[i : i + batch_size]
@@ -5635,8 +5692,8 @@ def save_predictions_to_simulation_table(
                             cursor.execute(
                                 """
                                 INSERT OR REPLACE INTO simulation_predictions_change_point
-                                (window_size, prefix, predicted_value, confidence, b_ratio, p_ratio, method, threshold, pred_frequency, updated_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
+                                (window_size, prefix, predicted_value, confidence, b_ratio, p_ratio, method, threshold, pred_frequency, sim_win_rate_pct, updated_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))
                                 """,
                                 item,
                             )
@@ -5672,31 +5729,44 @@ def generate_simulation_predictions_table(
     use_isolated_sim_db=False,
 ):
     """
-    시뮬레이션 전용 예측 테이블 생성 및 예측값 저장 (별도 실행)
-    
+    시뮬레이션 전용 예측 테이블에 **빈도 기반만** 저장. 기존 테이블을 지우지 않아 가중치 기반 등 다른 method 행은 유지됨.
+    run_prefix_win_rate에서 집계한 시뮬레이션 승률을 sim_win_rate_pct 컬럼에 함께 저장.
+
     **사용 방식:**
-    1. 이 함수를 먼저 실행하여 예측값 테이블 생성
-    2. 이후 batch_validate_first_anchor_extended_window_v3_cp 실행하여 검증
-    
+    1. 이 함수를 먼저 실행하여 빈도 기반 예측값만 갱신 (테이블 생성/유지)
+    2. 이후 batch_validate_* 실행하여 검증
+
     Args:
         cutoff_grid_string_id: cutoff ID (이 ID 이전 = 학습 데이터)
-        window_sizes: 윈도우 크기 목록 (기본값: 9, 10, 11, 12, 13, 14)
-        method: 예측 방법 (methods가 None일 때 사용)
+        window_sizes: 윈도우 크기 목록
+        method: 무시됨. 항상 빈도 기반만 저장.
         threshold: 임계값 (예측값 생성 시 사용)
         min_sample_count: 최소 표본 수 필터
-        methods: 저장할 예측 방법 목록. None이면 (method,) 사용.
-                 예: ("빈도 기반", "가중치 기반") 으로 두 방법 모두 저장 가능.
-        use_isolated_sim_db: True이면 simulation_predictions.db 사용 (다른 앱에 영향 없음).
-                            점진적 검증 시뮬레이션에서 사용.
-        
+        methods: 무시됨. 항상 ("빈도 기반",) 만 저장하여 기존 가중치 기반 등이 덮어쓰이지 않도록 함.
+        use_isolated_sim_db: True이면 simulation_predictions.db 사용.
+
     Returns:
         dict: 저장 결과 통계
     """
-    if methods is None:
-        methods = (method,)
+    from results_storage import query_step_events_prefix_win_rate
+
+    methods = ("빈도 기반",)
     pred_conn = get_simulation_predictions_db_connection() if use_isolated_sim_db else None
     try:
-        create_simulation_predictions_change_point_table(conn=pred_conn)
+        ensure_simulation_predictions_change_point_table(conn=pred_conn)
+        # 결과 조회 앱과 동일: step_events에서 (window_size, prefix)별 correct/total로 승률 계산
+        try:
+            df_win = query_step_events_prefix_win_rate(tuple(window_sizes))
+            win_rate_map = {}
+            if df_win is not None and len(df_win) > 0:
+                for _, r in df_win.iterrows():
+                    k = (int(r["window_size"]), str(r["prefix"]))
+                    v = r.get("win_rate_pct")
+                    if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                        win_rate_map[k] = float(v)
+            win_rate_map = win_rate_map if win_rate_map else None
+        except Exception:
+            win_rate_map = None
         pred_result = save_predictions_to_simulation_table(
             cutoff_grid_string_id=cutoff_grid_string_id,
             window_sizes=window_sizes,
@@ -5704,6 +5774,7 @@ def generate_simulation_predictions_table(
             thresholds=(threshold,),
             min_sample_count=min_sample_count,
             predictions_conn=pred_conn,
+            win_rate_map=win_rate_map,
         )
         return pred_result
     except Exception as e:

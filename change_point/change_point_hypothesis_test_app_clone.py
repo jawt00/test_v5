@@ -33,7 +33,9 @@ from change_point_hypothesis_module import (
     batch_validate_first_anchor_window9_10_cp,
     batch_validate_first_anchor_window9_10_agree55_v2_cp,
     batch_validate_first_anchor_window9_10_agree55_v3_cp,
+    batch_validate_first_anchor_window9_freq518_win50_cp,
     generate_simulation_predictions_table,
+    get_simulation_predictions_change_point_count,
     HYPOTHESIS_REGISTRY,
 )
 from results_storage import save_run_results
@@ -109,7 +111,7 @@ def main():
     if not _raw:
         st.error("등록된 가설이 없습니다.")
         return
-    _priority = ["first_anchor_extended_window_v3", "first_anchor_window9_10", "first_anchor_window9_10_agree55_v2", "first_anchor_window9_10_agree55_v3", "first_anchor_window9_only"]
+    _priority = ["first_anchor_extended_window_v3", "first_anchor_window9_freq518_win50", "first_anchor_window9_10", "first_anchor_window9_10_agree55_v2", "first_anchor_window9_10_agree55_v3", "first_anchor_window9_only"]
     available_hypotheses = [h for h in _priority if h in _raw] + [h for h in _raw if h not in _priority]
     
     # 테스트 모드 선택
@@ -188,6 +190,7 @@ def main():
         # agree55 v2: 가중치 신뢰도 70% 이상이면 무조건 가중치 예측 사용
         is_first_anchor_window9_10_agree55_v2 = (selected_hypothesis_name == "first_anchor_window9_10_agree55_v2")
         is_first_anchor_window9_10_agree55_v3 = (selected_hypothesis_name == "first_anchor_window9_10_agree55_v3")
+        is_first_anchor_window9_freq518_win50 = (selected_hypothesis_name == "first_anchor_window9_freq518_win50")
 
         if is_threshold_skip_anchor_priority:
             st.markdown("#### 윈도우 크기 선택 및 임계값 설정")
@@ -536,6 +539,37 @@ def main():
                             st.success(f"✅ 예측값 테이블 생성 완료! (저장된 레코드: {result.get('total_saved', 0):,}개)")
                         except Exception as e:
                             st.error(f"❌ 예측값 테이블 생성 실패: {str(e)}")
+        elif is_first_anchor_window9_freq518_win50:
+            st.markdown("#### 윈도우 9 (빈도 51.8% + 승률 50%)")
+            st.info("📌 **윈도우 9만** 검증. 빈도 신뢰도 ≥ 51.8% **및** 시뮬레이션 승률 ≥ 50%일 때만 예측 사용.")
+            ws = [9]
+            st.markdown("#### 규칙에 적용되는 조건")
+            col_t1, col_t2 = st.columns(2)
+            with col_t1:
+                thresh_freq_fw = st.number_input("빈도 신뢰도 최소 (%)", 0.0, 100.0, 51.8, 0.1, key="thresh_freq518_freq_clone")
+            with col_t2:
+                min_win_rate_fw = st.number_input("시뮬레이션 승률 최소 (%)", 0.0, 100.0, 50.0, 0.1, key="min_win_rate_freq518_clone")
+            hypothesis_config = {}
+            st.markdown("---")
+            st.markdown("#### 🔧 시뮬레이션 예측값 테이블 생성 (필수)")
+            if st.button("예측값 테이블 생성", key="generate_freq518_win50_predictions_clone", type="secondary"):
+                if cutoff_sim is None:
+                    st.warning("기준 Grid String ID를 선택하세요.")
+                else:
+                    with st.spinner("예측값 테이블 생성 중... (빈도 기반 9~14, threshold=0, 시뮬레이션 승률 포함)"):
+                        try:
+                            result = generate_simulation_predictions_table(
+                                cutoff_grid_string_id=cutoff_sim,
+                                window_sizes=(9, 10, 11, 12, 13, 14),
+                                method="빈도 기반",
+                                threshold=0,
+                                methods=("빈도 기반",),
+                            )
+                            st.success(f"✅ 예측값 테이블 생성 완료! (저장된 레코드: {result.get('total_saved', 0):,}개)")
+                            st.session_state["freq518_win50_predictions_generated"] = True
+                        except Exception as e:
+                            st.error(f"❌ 예측값 테이블 생성 실패: {str(e)}")
+                            st.session_state["freq518_win50_predictions_generated"] = False
         else:
             st.markdown("#### 윈도우 크기")
             col_w1, col_w2, col_w3, col_w4, col_w5 = st.columns(5)
@@ -665,6 +699,23 @@ def main():
                     st.session_state["test_thresh_freq"] = thresh_freq_v3
                     st.session_state["test_thresh_weight"] = thresh_weight_v3
                     st.session_state["test_weight_unconditional_v2"] = weight_unconditional_v3
+                    st.session_state["test_results"] = None
+                    st.rerun()
+            elif is_first_anchor_window9_freq518_win50:
+                if cutoff_sim is None:
+                    st.warning("기준 Grid String ID를 선택하세요.")
+                elif not (st.session_state.get("freq518_win50_predictions_generated", False) or get_simulation_predictions_change_point_count() > 0):
+                    st.warning("⚠️ 예측값 테이블이 비어 있거나 시뮬레이션 승률이 없을 수 있습니다. '예측값 테이블 생성'을 먼저 실행하세요.")
+                else:
+                    st.session_state["test_mode"] = "single"
+                    st.session_state["test_hypothesis"] = selected_hypothesis_name
+                    st.session_state["test_config"] = hypothesis_config
+                    st.session_state["test_cutoff"] = cutoff_sim if cutoff_sim is not None else 0
+                    st.session_state["test_ws"] = ws
+                    st.session_state["test_method"] = method_sim
+                    st.session_state["test_thresh"] = thresh_freq_fw
+                    st.session_state["test_thresh_freq"] = thresh_freq_fw
+                    st.session_state["test_min_win_rate_pct"] = min_win_rate_fw
                     st.session_state["test_results"] = None
                     st.rerun()
             elif is_first_anchor_extended_v2:
@@ -880,7 +931,7 @@ def main():
                 
                 # 결과 저장 (수동): V3 단일 테스트이고 상세 히스토리가 있을 때만
                 run_params = st.session_state.get("test_run_params")
-                saveable_hypotheses = ("first_anchor_extended_window_v3", "first_anchor_window9_10", "first_anchor_window9_10_agree55_v2", "first_anchor_window9_10_agree55_v3")
+                saveable_hypotheses = ("first_anchor_extended_window_v3", "first_anchor_window9_10", "first_anchor_window9_10_agree55_v2", "first_anchor_window9_10_agree55_v3", "first_anchor_window9_freq518_win50")
                 if run_params and run_params.get("hypothesis_key") in saveable_hypotheses:
                     if st.button("결과 저장", key="save_results_btn", type="secondary", use_container_width=True):
                         try:
@@ -1288,6 +1339,15 @@ def main():
                             min_confidence_weight=thresh_weight,
                             weight_confidence_unconditional=weight_unconditional,
                         )
+                    elif hyp_name == "first_anchor_window9_freq518_win50":
+                        min_conf_freq = st.session_state.get("test_thresh_freq", 51.8)
+                        min_wr = st.session_state.get("test_min_win_rate_pct", 50.0)
+                        res = batch_validate_first_anchor_window9_freq518_win50_cp(
+                            cutoff_sim,
+                            threshold=0,
+                            min_confidence_freq=min_conf_freq,
+                            min_win_rate_pct=min_wr,
+                        )
                     # threshold_skip_anchor_priority 가설인 경우 특별한 검증 함수 사용
                     elif hyp_name == "threshold_skip_anchor_priority":
                         window_thresholds = hyp_config.get("window_thresholds", {})
@@ -1396,6 +1456,15 @@ def main():
                                 min_confidence_freq=thresh_freq,
                                 min_confidence_weight=thresh_weight,
                                 weight_confidence_unconditional=weight_unconditional,
+                            )
+                        elif hyp_name == "first_anchor_window9_freq518_win50":
+                            min_conf_freq = st.session_state.get("test_thresh_freq", 51.8)
+                            min_wr = st.session_state.get("test_min_win_rate_pct", 50.0)
+                            res = batch_validate_first_anchor_window9_freq518_win50_cp(
+                                cutoff_sim,
+                                threshold=0,
+                                min_confidence_freq=min_conf_freq,
+                                min_win_rate_pct=min_wr,
                             )
                         # threshold_skip_anchor_priority 가설인 경우 특별한 검증 함수 사용
                         elif hyp_name == "threshold_skip_anchor_priority":

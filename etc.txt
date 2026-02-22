@@ -11,6 +11,8 @@ cd /c/test_v5
 
 git clone https://github.com/arche00/test_v5.git
 
+git clone -b change_point-local https://github.com/arche00/test_v5.git
+
 git pull origin master
 
 
@@ -139,6 +141,11 @@ streamlit run change_point_live_game_app_v5.py
 streamlit run change_point/change_point_v3_verification_test_app.py
 streamlit run change_point_live_game_app_flow_fixed.py
 
+
+streamlit run change_point_live_game_app_agree55.py
+
+streamlit run change_point_live_game_freq518_win50.py
+
 streamlit run change_point_live_game_app_three_modes.py
 streamlit run change_point_live_game_app_three_modes_copy.py
 
@@ -239,6 +246,13 @@ v3 규칙에서 가중치 기반 신뢰도는 사용하지 않아
 3452
 
 pppbpbbppbpppbppbbbbbpbpbbbbbbpbbbbpbppppbppbpbpbbppbbppbpbppppbbpp
+
+
+ppbpbppb
+ppbpbppbbbpbbp
+
+
+ppppbppbppbpppppbpbppbpbpbpppppbpbbppbpppbpbpbbbpppbpbbpppppppbbpp
 
 
 52 

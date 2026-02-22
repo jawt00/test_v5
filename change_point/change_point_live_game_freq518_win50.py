@@ -342,25 +342,21 @@ def live_step(state: dict, grid_string: str, history: list, user_input: str):
     new_anchors = _anchors_from_grid_string(new_grid_string)
     search_from = state.get("search_from", state.get("current_pos", 0))
 
+    # 다음 예측 위치 next_pos를 커버하는 앵커로 전환 (윈도우 9: anchor = next_pos - 8)
+    anchor_for_next = next_pos - 8
+    new_anchor_idx = next((i for i, a in enumerate(new_anchors) if a == anchor_for_next), len(new_anchors))
+    if new_anchor_idx >= len(new_anchors):
+        new_anchor_idx = next((i for i, a in enumerate(new_anchors) if a >= anchor_for_next), len(new_anchors))
+    new_search_from = next_pos
+
     if ok:
-        new_search_from = next_pos
-        new_anchor_idx = _first_anchor_from_position(new_anchors, new_search_from)
         new_fc = 0
         new_next_window = 9
     else:
         new_fc = fc + 1
         if new_fc >= MAX_CONSECUTIVE_FAILURES:
-            new_search_from = next_pos
-            new_anchor_idx = _first_anchor_from_position(new_anchors, new_search_from)
             new_fc = 0
-            new_next_window = 9
-        else:
-            new_search_from = search_from
-            old_val = anchors[aidx] if aidx < len(anchors) else None
-            new_anchor_idx = next((i for i in range(len(new_anchors)) if new_anchors[i] == old_val), len(new_anchors))
-            if new_anchor_idx >= len(new_anchors):
-                new_anchor_idx = min(aidx, len(new_anchors) - 1)
-            new_next_window = 9  # 윈도우 9만 사용
+        new_next_window = 9
 
     new_state = {
         "current_pos": next_pos,

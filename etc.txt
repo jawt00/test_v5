@@ -171,15 +171,15 @@ git push origin change_point
 12 56 70 
 
 
-git checkout -b change_point-v2
+git checkout -b change_point-v3
 
-git pull origin change_point-v2
+git pull origin change_point-v3
 
 git add .
 
 git commit -m "$(date +%Y%m%d_%H%M)"
 
-git push -u origin change_point-v2
+git push -u origin change_point-v3
 
 
 

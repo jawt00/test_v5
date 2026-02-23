@@ -141,8 +141,9 @@ streamlit run change_point_live_game_app_v5.py
 streamlit run change_point/change_point_v3_verification_test_app.py
 streamlit run change_point_live_game_app_flow_fixed.py
 
+streamlit run change_point_live_game_freq518_win50.py
 
-streamlit run change_point_live_game_app_agree55.py
+streamlit run change_point_live_game_agree55.py
 
 streamlit run change_point_live_game_freq518_win50.py
 
@@ -256,4 +257,9 @@ ppppbppbppbpppppbpbppbpbpbpppppbpbbppbpppbpbpbbbpppbpbbpppppppbbpp
 
 
 52 
+
+
+pppbpbppbpbbbbpbppbp
+
+
 

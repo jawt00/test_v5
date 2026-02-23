@@ -36,10 +36,13 @@ from change_point_hypothesis_module import (
     batch_validate_first_anchor_window9_10_agree55_cp,
     batch_validate_first_anchor_window9_10_agree55_v2_cp,
     batch_validate_first_anchor_window9_10_agree55_v3_cp,
-    batch_validate_first_anchor_window9_freq518_win50_cp,
     generate_simulation_predictions_table,
     get_simulation_predictions_change_point_count,
     HYPOTHESIS_REGISTRY,
+)
+import change_point_hypothesis_module as _cph_mod
+batch_validate_first_anchor_window9_freq518_win50_cp = getattr(
+    _cph_mod, "batch_validate_first_anchor_window9_freq518_win50_cp", None
 )
 from results_storage import save_run_results
 
@@ -713,9 +716,9 @@ def main():
             st.markdown("#### 규칙에 적용되는 조건")
             col_t1, col_t2 = st.columns(2)
             with col_t1:
-                thresh_freq_fw = st.number_input("빈도 신뢰도 최소 (%)", 0.0, 100.0, 51.8, 0.1, key="thresh_freq518_freq", help="빈도 기반 confidence가 이 값 이상일 때만 조건 충족")
+                thresh_freq_fw = st.number_input("빈도 신뢰도 최소 (%)", 0.0, 100.0, 51.3, 0.1, key="thresh_freq518_freq", help="빈도 기반 confidence가 이 값 이상일 때만 조건 충족")
             with col_t2:
-                min_win_rate_fw = st.number_input("시뮬레이션 승률 최소 (%)", 0.0, 100.0, 50.0, 0.1, key="min_win_rate_freq518", help="sim_win_rate_pct가 이 값 이상일 때만 조건 충족")
+                min_win_rate_fw = st.number_input("시뮬레이션 승률 최소 (%)", 0.0, 100.0, 52.0, 0.1, key="min_win_rate_freq518", help="sim_win_rate_pct가 이 값 이상일 때만 조건 충족")
             hypothesis_config = {}
             st.markdown("---")
             st.markdown("#### 🔧 시뮬레이션 예측값 테이블 생성 (필수)")
@@ -1623,14 +1626,18 @@ def main():
                         )
                     # 윈도우 9 (빈도 51.8% + 승률 50%)
                     elif hyp_name == "first_anchor_window9_freq518_win50":
-                        min_conf_freq = st.session_state.get("test_thresh_freq", 51.8)
-                        min_wr = st.session_state.get("test_min_win_rate_pct", 50.0)
-                        res = batch_validate_first_anchor_window9_freq518_win50_cp(
-                            cutoff_sim,
-                            threshold=0,
-                            min_confidence_freq=min_conf_freq,
-                            min_win_rate_pct=min_wr,
-                        )
+                        if batch_validate_first_anchor_window9_freq518_win50_cp is None:
+                            st.error("이 가설을 사용하려면 change_point_hypothesis_module에 batch_validate_first_anchor_window9_freq518_win50_cp가 필요합니다. 모듈을 확인하거나 __pycache__를 삭제 후 다시 실행하세요.")
+                            res = None
+                        else:
+                            min_conf_freq = st.session_state.get("test_thresh_freq", 51.3)
+                            min_wr = st.session_state.get("test_min_win_rate_pct", 52.0)
+                            res = batch_validate_first_anchor_window9_freq518_win50_cp(
+                                cutoff_sim,
+                                threshold=0,
+                                min_confidence_freq=min_conf_freq,
+                                min_win_rate_pct=min_wr,
+                            )
                     # threshold_skip_anchor_priority 가설인 경우 특별한 검증 함수 사용
                     elif hyp_name == "threshold_skip_anchor_priority":
                         window_thresholds = hyp_config.get("window_thresholds", {})
@@ -1772,14 +1779,18 @@ def main():
                             )
                         # 윈도우 9 (빈도 51.8% + 승률 50%)
                         elif hyp_name == "first_anchor_window9_freq518_win50":
-                            min_conf_freq = st.session_state.get("test_thresh_freq", 51.8)
-                            min_wr = st.session_state.get("test_min_win_rate_pct", 50.0)
-                            res = batch_validate_first_anchor_window9_freq518_win50_cp(
-                                cutoff_sim,
-                                threshold=0,
-                                min_confidence_freq=min_conf_freq,
-                                min_win_rate_pct=min_wr,
-                            )
+                            if batch_validate_first_anchor_window9_freq518_win50_cp is None:
+                                st.error("이 가설을 사용하려면 change_point_hypothesis_module에 batch_validate_first_anchor_window9_freq518_win50_cp가 필요합니다. 모듈을 확인하거나 __pycache__를 삭제 후 다시 실행하세요.")
+                                res = None
+                            else:
+                                min_conf_freq = st.session_state.get("test_thresh_freq", 51.3)
+                                min_wr = st.session_state.get("test_min_win_rate_pct", 52.0)
+                                res = batch_validate_first_anchor_window9_freq518_win50_cp(
+                                    cutoff_sim,
+                                    threshold=0,
+                                    min_confidence_freq=min_conf_freq,
+                                    min_win_rate_pct=min_wr,
+                                )
                         # threshold_skip_anchor_priority 가설인 경우 특별한 검증 함수 사용
                         elif hyp_name == "threshold_skip_anchor_priority":
                             hyp_config = configs.get(hyp_name, {})

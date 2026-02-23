@@ -1,9 +1,9 @@
 """
-윈도우 9 전용 (빈도 51.4% + 시뮬레이션 승률 53%) 라이브 게임 앱.
+윈도우 9 전용 (빈도 51.3% + 시뮬레이션 승률 49.9%) 라이브 게임 앱.
 
 - Cold Start → State Handoff → Live Loop (기존 플로우와 동일).
 - 예측: simulation_predictions_change_point에서 빈도 기반만 조회,
-  빈도 신뢰도 ≥ 51.4% 및 sim_win_rate_pct ≥ 53%일 때만 사용 (테이블 threshold=0).
+  빈도 신뢰도 ≥ 51.3% 및 sim_win_rate_pct ≥ 49.9%일 때만 사용 (테이블 threshold=0).
 - 윈도우 9만 사용. 앵커 중첩 시 이전 앵커만 검증(validated_positions).
 """
 
@@ -20,16 +20,16 @@ from svg_parser_module import get_change_point_db_connection
 from results_storage import save_live_run_results
 
 st.set_page_config(
-    page_title="윈도우 9 (빈도 51.4% + 승률 53%) 라이브 게임",
+    page_title="윈도우 9 (빈도 51.3% + 승률 49.9%) 라이브 게임",
     page_icon="🎯",
     layout="wide",
 )
 
-# 윈도우 9만, 빈도 51.4% + 시뮬 승률 53%
+# 윈도우 9만, 빈도 51.3% + 시뮬 승률 49.9%
 WINDOW_SIZES = (9,)
 TABLE_THRESHOLD = 0  # 테이블 조회 시 항상 0
-MIN_CONFIDENCE_FREQ = 51.4
-MIN_WIN_RATE_PCT = 53.0
+MIN_CONFIDENCE_FREQ = 51.3
+MIN_WIN_RATE_PCT = 49.9
 MAX_CONSECUTIVE_FAILURES = 3
 MIN_GRID_LENGTH = 6
 
@@ -166,10 +166,8 @@ def cold_start(grid_string: str, min_confidence_freq: float = MIN_CONFIDENCE_FRE
 
                 if ok:
                     current_pos = pos + 1
-                    anchor_idx = _first_anchor_from_position(anchors, current_pos)
-                    if anchor_idx >= len(anchors):
-                        anchors.append(current_pos)
-                        anchor_idx = len(anchors) - 1
+                    # Cold Start: 정답 시 다음 앵커를 순차로 진행(anchor_idx+1). 위치 기준 점프 시 중간 앵커 검증이 누락됨.
+                    anchor_idx += 1
                     anchor_consecutive_failures = 0
                     anchor_completed = True
                     did_finish_anchor = True
@@ -451,8 +449,8 @@ def build_validation_history_table(history):
 
 
 def main():
-    st.title("🎯 윈도우 9 (빈도 51.4% + 시뮬레이션 승률 53%) 라이브 게임")
-    st.markdown("**Cold Start → State Handoff → Live Loop** · 윈도우 9만 사용 · 빈도 51.4%·승률 53% 조건 (테이블 threshold=0)")
+    st.title("🎯 윈도우 9 (빈도 51.3% + 시뮬레이션 승률 49.9%) 라이브 게임")
+    st.markdown("**Cold Start → State Handoff → Live Loop** · 윈도우 9만 사용 · 빈도 51.3%·승률 49.9% 조건 (테이블 threshold=0)")
 
     if "flow_freq518_win50_result" not in st.session_state:
         st.session_state.flow_freq518_win50_result = None

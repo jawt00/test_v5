@@ -1114,7 +1114,7 @@ class FirstAnchorWindow9Freq518Win50Hypothesis(Hypothesis):
         }
 
     def get_name(self):
-        return "윈도우 9 (빈도 51.8% + 승률 50%)"
+        return "윈도우9 빈도+승률"
 
     def get_description(self):
         return (

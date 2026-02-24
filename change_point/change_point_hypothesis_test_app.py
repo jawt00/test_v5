@@ -709,16 +709,16 @@ def main():
                         except Exception as e:
                             st.error(f"❌ 예측값 테이블 생성 실패: {str(e)}")
         elif is_first_anchor_window9_freq518_win50:
-            # 윈도우 9 전용 (빈도 51.8% + 승률 50%): 검증 시 윈도우 9만, 테이블은 9~14 생성·승률 포함
-            st.markdown("#### 윈도우 9 (빈도 51.8% + 승률 50%)")
-            st.info("📌 **윈도우 9만** 검증. 빈도 신뢰도 ≥ 51.8% **및** 시뮬레이션 승률 ≥ 50%일 때만 예측 사용. 한쪽이라도 불만족 시 스킵.")
+            # 윈도우9 빈도+승률: 검증 시 윈도우 9만, 테이블은 9~14 생성·승률 포함
+            st.markdown("#### 윈도우9 빈도+승률")
+            st.info("📌 **윈도우 9만** 검증. 아래 조건(빈도 신뢰도·시뮬레이션 승률)을 모두 만족할 때만 예측 사용. 한쪽이라도 불만족 시 스킵.")
             ws = [9]
             st.markdown("#### 규칙에 적용되는 조건")
             col_t1, col_t2 = st.columns(2)
             with col_t1:
                 thresh_freq_fw = st.number_input("빈도 신뢰도 최소 (%)", 0.0, 100.0, 51.3, 0.1, key="thresh_freq518_freq", help="빈도 기반 confidence가 이 값 이상일 때만 조건 충족")
             with col_t2:
-                min_win_rate_fw = st.number_input("시뮬레이션 승률 최소 (%)", 0.0, 100.0, 52.0, 0.1, key="min_win_rate_freq518", help="sim_win_rate_pct가 이 값 이상일 때만 조건 충족")
+                min_win_rate_fw = st.number_input("시뮬레이션 승률 최소 (%)", 0.0, 100.0, 49.9, 0.1, key="min_win_rate_freq518", help="sim_win_rate_pct가 이 값 이상일 때만 조건 충족")
             hypothesis_config = {}
             st.markdown("---")
             st.markdown("#### 🔧 시뮬레이션 예측값 테이블 생성 (필수)")
@@ -1631,7 +1631,7 @@ def main():
                             res = None
                         else:
                             min_conf_freq = st.session_state.get("test_thresh_freq", 51.3)
-                            min_wr = st.session_state.get("test_min_win_rate_pct", 52.0)
+                            min_wr = st.session_state.get("test_min_win_rate_pct", 49.9)
                             res = batch_validate_first_anchor_window9_freq518_win50_cp(
                                 cutoff_sim,
                                 threshold=0,
@@ -1784,7 +1784,7 @@ def main():
                                 res = None
                             else:
                                 min_conf_freq = st.session_state.get("test_thresh_freq", 51.3)
-                                min_wr = st.session_state.get("test_min_win_rate_pct", 52.0)
+                                min_wr = st.session_state.get("test_min_win_rate_pct", 49.9)
                                 res = batch_validate_first_anchor_window9_freq518_win50_cp(
                                     cutoff_sim,
                                     threshold=0,

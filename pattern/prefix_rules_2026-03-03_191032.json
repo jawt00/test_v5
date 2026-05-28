@@ -1,0 +1,30 @@
+[
+  {
+    "prefix": "pbpppbpp",
+    "prediction": "B"
+  },
+  {
+    "prefix": "pbpppbbpbb",
+    "prediction": "P"
+  },
+  {
+    "prefix": "bpbbbbpb",
+    "prediction": "B"
+  },
+  {
+    "prefix": "pbbbbbbpbb",
+    "prediction": "B"
+  },
+  {
+    "prefix": "pbpppbbbpp",
+    "prediction": "P"
+  },
+  {
+    "prefix": "pbpppbbb",
+    "prediction": "P"
+  },
+  {
+    "prefix": "bpbpbbpbbb",
+    "prediction": "B"
+  }
+]

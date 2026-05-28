@@ -1,0 +1,81 @@
+{
+  "filter_conditions": null,
+  "rules": [
+    {
+      "prefix": "bpbbpbpb",
+      "prediction": "P"
+    },
+    {
+      "prefix": "bpbpppbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "pbpbppbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "pbppbpbp",
+      "prediction": "P"
+    },
+    {
+      "prefix": "bpbbbpbbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bpbpbbbbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bpbpppbbb",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bpbppppbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bppbbbbpp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bppbbbpbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bppbbppbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bppbppbpp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bpppbpbbb",
+      "prediction": "P"
+    },
+    {
+      "prefix": "pbbbbbbpb",
+      "prediction": "B"
+    },
+    {
+      "prefix": "pbbpppbbb",
+      "prediction": "P"
+    },
+    {
+      "prefix": "pbpbppbbb",
+      "prediction": "P"
+    },
+    {
+      "prefix": "pbpbpppbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "pbppbbbbb",
+      "prediction": "B"
+    },
+    {
+      "prefix": "pbppbbbpp",
+      "prediction": "B"
+    }
+  ]
+}

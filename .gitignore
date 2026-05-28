@@ -1,0 +1,6 @@
+# 모든 파일 커밋 (제외 없음)
+
+__pycache__/
+venv/
+.venv/
+rclone.exe

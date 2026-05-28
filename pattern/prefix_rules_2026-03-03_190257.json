@@ -1,0 +1,38 @@
+[
+  {
+    "prefix": "bpbbbbpb",
+    "prediction": "B"
+  },
+  {
+    "prefix": "bpbbbpbp",
+    "prediction": "B"
+  },
+  {
+    "prefix": "pbpppbbb",
+    "prediction": "P"
+  },
+  {
+    "prefix": "pbpppbpp",
+    "prediction": "B"
+  },
+  {
+    "prefix": "bpbbbbbbpb",
+    "prediction": "B"
+  },
+  {
+    "prefix": "bpbbbbppbb",
+    "prediction": "B"
+  },
+  {
+    "prefix": "bpbpbbpbbb",
+    "prediction": "B"
+  },
+  {
+    "prefix": "pbbbbbbpbb",
+    "prediction": "B"
+  },
+  {
+    "prefix": "pbpppbbbpp",
+    "prediction": "P"
+  }
+]

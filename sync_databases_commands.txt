@@ -1,0 +1,73 @@
+================================================================================
+1. change_point_ngram.db 초기화
+================================================================================
+
+다음 명령어를 실행하여 change_point_ngram.db의 모든 테이블을 삭제합니다:
+
+sqlite3 change_point/change_point_ngram.db "DROP TABLE IF EXISTS ngram_chunks_change_point; DROP TABLE IF EXISTS preprocessed_grid_strings;"
+
+================================================================================
+2. hypothesis_validation.db에서 change_point_ngram.db로 데이터 복제
+================================================================================
+
+다음 명령어를 실행하여 hypothesis_validation.db의 preprocessed_grid_strings 데이터를 
+change_point_ngram.db의 preprocessed_grid_strings로 복제합니다:
+
+sqlite3 change_point/change_point_ngram.db "ATTACH DATABASE 'hypothesis_validation.db' AS source_db; INSERT OR IGNORE INTO preprocessed_grid_strings (grid_string, source_session_id, source_id, string_length, b_count, p_count, t_count, b_ratio, p_ratio) SELECT grid_string, source_session_id, source_id, string_length, b_count, COALESCE(p_count, 0) as p_count, 0 as t_count, COALESCE(b_ratio, 0.0) as b_ratio, COALESCE(p_ratio, 0.0) as p_ratio FROM source_db.preprocessed_grid_strings; DETACH DATABASE source_db;"
+
+================================================================================
+단계별 실행 (Windows PowerShell)
+================================================================================
+
+# 1단계: change_point_ngram.db 초기화
+sqlite3 change_point/change_point_ngram.db "DROP TABLE IF EXISTS ngram_chunks_change_point; DROP TABLE IF EXISTS preprocessed_grid_strings;"
+
+# 2단계: 테이블 재생성 (앱 실행 시 자동 생성되지만, 수동으로도 가능)
+sqlite3 change_point/change_point_ngram.db "CREATE TABLE IF NOT EXISTS preprocessed_grid_strings (id INTEGER PRIMARY KEY AUTOINCREMENT, grid_string TEXT NOT NULL UNIQUE, source_session_id TEXT, source_id TEXT, string_length INTEGER NOT NULL, b_count INTEGER NOT NULL DEFAULT 0, p_count INTEGER NOT NULL DEFAULT 0, t_count INTEGER NOT NULL DEFAULT 0, b_ratio REAL NOT NULL DEFAULT 0.0, p_ratio REAL NOT NULL DEFAULT 0.0, created_at TIMESTAMP DEFAULT (datetime('now', '+9 hours')));"
+
+# 3단계: 데이터 복제
+sqlite3 change_point/change_point_ngram.db "ATTACH DATABASE 'hypothesis_validation.db' AS source_db; INSERT OR IGNORE INTO preprocessed_grid_strings (grid_string, source_session_id, source_id, string_length, b_count, p_count, t_count, b_ratio, p_ratio) SELECT grid_string, source_session_id, source_id, string_length, b_count, COALESCE(p_count, 0) as p_count, 0 as t_count, COALESCE(b_ratio, 0.0) as b_ratio, COALESCE(p_ratio, 0.0) as p_ratio FROM source_db.preprocessed_grid_strings; DETACH DATABASE source_db;"
+
+================================================================================
+한 번에 실행 (Windows PowerShell)
+================================================================================
+
+# 초기화 + 테이블 생성 + 데이터 복제를 한 번에 실행
+sqlite3 change_point/change_point_ngram.db "DROP TABLE IF EXISTS ngram_chunks_change_point; DROP TABLE IF EXISTS preprocessed_grid_strings; CREATE TABLE IF NOT EXISTS preprocessed_grid_strings (id INTEGER PRIMARY KEY AUTOINCREMENT, grid_string TEXT NOT NULL UNIQUE, source_session_id TEXT, source_id TEXT, string_length INTEGER NOT NULL, b_count INTEGER NOT NULL DEFAULT 0, p_count INTEGER NOT NULL DEFAULT 0, t_count INTEGER NOT NULL DEFAULT 0, b_ratio REAL NOT NULL DEFAULT 0.0, p_ratio REAL NOT NULL DEFAULT 0.0, created_at TIMESTAMP DEFAULT (datetime('now', '+9 hours'))); ATTACH DATABASE 'hypothesis_validation.db' AS source_db; INSERT OR IGNORE INTO preprocessed_grid_strings (grid_string, source_session_id, source_id, string_length, b_count, p_count, t_count, b_ratio, p_ratio) SELECT grid_string, source_session_id, source_id, string_length, b_count, COALESCE(p_count, 0) as p_count, 0 as t_count, COALESCE(b_ratio, 0.0) as b_ratio, COALESCE(p_ratio, 0.0) as p_ratio FROM source_db.preprocessed_grid_strings; DETACH DATABASE source_db;"
+
+================================================================================
+검증 명령어
+================================================================================
+
+# 복제된 데이터 개수 확인
+sqlite3 change_point/change_point_ngram.db "SELECT COUNT(*) FROM preprocessed_grid_strings;"
+
+# 원본 데이터 개수 확인
+sqlite3 hypothesis_validation.db "SELECT COUNT(*) FROM preprocessed_grid_strings;"
+
+# 샘플 데이터 확인
+sqlite3 change_point/change_point_ngram.db "SELECT id, grid_string, string_length, b_count, p_count FROM preprocessed_grid_strings LIMIT 5;"
+
+================================================================================
+3. 복제된 grid_string으로 ngram_chunks_change_point 생성
+================================================================================
+
+다음 Python 스크립트를 실행하여 모든 grid_string에 대해 ngram_chunks_change_point를 생성합니다:
+
+python generate_change_point_ngrams.py
+
+또는 PowerShell에서:
+python .\generate_change_point_ngrams.py
+
+================================================================================
+생성된 ngram_chunks_change_point 확인
+================================================================================
+
+# 생성된 ngram 개수 확인 (윈도우별)
+sqlite3 change_point/change_point_ngram.db "SELECT window_size, COUNT(*) as count FROM ngram_chunks_change_point GROUP BY window_size ORDER BY window_size;"
+
+# 전체 ngram 개수 확인
+sqlite3 change_point/change_point_ngram.db "SELECT COUNT(*) FROM ngram_chunks_change_point;"
+
+# 특정 grid_string_id의 ngram 확인
+sqlite3 change_point/change_point_ngram.db "SELECT window_size, COUNT(*) as count FROM ngram_chunks_change_point WHERE grid_string_id = 1 GROUP BY window_size;"

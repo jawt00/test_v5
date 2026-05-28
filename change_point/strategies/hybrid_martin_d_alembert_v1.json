@@ -1,0 +1,62 @@
+{
+  "strategy_info": {
+    "name": "Hybrid_Martin_D_Alembert",
+    "version": "1.0",
+    "description": "1-3단 마틴게일 복구, 4-6단 달랑베르 방어형 하이브리드",
+    "budget_limit": 250,
+    "odds": {
+      "main": 2.0,
+      "draw": 8.0
+    }
+  },
+  "stages": {
+    "1": {
+      "main_bet": 5,
+      "draw_bet": 1,
+      "total_cost": 6,
+      "cumulative_cost": 6,
+      "net_profit_on_main_win": 4,
+      "tag": "테스트/탐색"
+    },
+    "2": {
+      "main_bet": 10,
+      "draw_bet": 1,
+      "total_cost": 11,
+      "cumulative_cost": 17,
+      "net_profit_on_main_win": 3,
+      "tag": "마틴게일 성격 (본전)"
+    },
+    "3": {
+      "main_bet": 25,
+      "draw_bet": 3,
+      "total_cost": 28,
+      "cumulative_cost": 45,
+      "net_profit_on_main_win": 5,
+      "tag": "변곡점 (강한 복구)"
+    },
+    "4": {
+      "main_bet": 35,
+      "draw_bet": 4,
+      "total_cost": 39,
+      "cumulative_cost": 84,
+      "net_profit_on_main_win": -14,
+      "tag": "달랑베르 전환 (감쇄)"
+    },
+    "5": {
+      "main_bet": 50,
+      "draw_bet": 6,
+      "total_cost": 56,
+      "cumulative_cost": 140,
+      "net_profit_on_main_win": -40,
+      "tag": "생존 모드"
+    },
+    "6": {
+      "main_bet": 70,
+      "draw_bet": 9,
+      "total_cost": 79,
+      "cumulative_cost": 219,
+      "net_profit_on_main_win": -79,
+      "tag": "최종 방어선"
+    }
+  }
+}

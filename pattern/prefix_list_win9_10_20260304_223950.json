@@ -1,0 +1,125 @@
+{
+  "window_sizes": [
+    9,
+    10
+  ],
+  "generated_at": "2026-03-04T22:39:50",
+  "rules": [
+    {
+      "window_size": 9,
+      "prefix": "bpbbpbpb",
+      "prediction": "P",
+      "freq_ngram": 686,
+      "suffix_freq": 361,
+      "suffix_confidence_pct": 52.62,
+      "win_rate_pct": 64.16,
+      "total_events": 173
+    },
+    {
+      "window_size": 9,
+      "prefix": "bpbpppbp",
+      "prediction": "B",
+      "freq_ngram": 618,
+      "suffix_freq": 332,
+      "suffix_confidence_pct": 53.72,
+      "win_rate_pct": 61.04,
+      "total_events": 154
+    },
+    {
+      "window_size": 9,
+      "prefix": "bppbpbbp",
+      "prediction": "B",
+      "freq_ngram": 692,
+      "suffix_freq": 384,
+      "suffix_confidence_pct": 55.49,
+      "win_rate_pct": 57.81,
+      "total_events": 256
+    },
+    {
+      "window_size": 9,
+      "prefix": "pbbbpbpb",
+      "prediction": "P",
+      "freq_ngram": 685,
+      "suffix_freq": 363,
+      "suffix_confidence_pct": 52.99,
+      "win_rate_pct": 57.46,
+      "total_events": 181
+    },
+    {
+      "window_size": 9,
+      "prefix": "pbbppppb",
+      "prediction": "P",
+      "freq_ngram": 652,
+      "suffix_freq": 353,
+      "suffix_confidence_pct": 54.14,
+      "win_rate_pct": 56.89,
+      "total_events": 167
+    },
+    {
+      "window_size": 9,
+      "prefix": "pbpbpbpp",
+      "prediction": "B",
+      "freq_ngram": 666,
+      "suffix_freq": 352,
+      "suffix_confidence_pct": 52.85,
+      "win_rate_pct": 58.03,
+      "total_events": 193
+    },
+    {
+      "window_size": 9,
+      "prefix": "pbpbppbp",
+      "prediction": "B",
+      "freq_ngram": 629,
+      "suffix_freq": 331,
+      "suffix_confidence_pct": 52.62,
+      "win_rate_pct": 62.5,
+      "total_events": 216
+    },
+    {
+      "window_size": 9,
+      "prefix": "pbppbpbp",
+      "prediction": "P",
+      "freq_ngram": 673,
+      "suffix_freq": 354,
+      "suffix_confidence_pct": 52.6,
+      "win_rate_pct": 60.61,
+      "total_events": 165
+    },
+    {
+      "window_size": 9,
+      "prefix": "pbppbppp",
+      "prediction": "B",
+      "freq_ngram": 587,
+      "suffix_freq": 318,
+      "suffix_confidence_pct": 54.17,
+      "win_rate_pct": 58.33,
+      "total_events": 180
+    },
+    {
+      "window_size": 9,
+      "prefix": "pbppppbp",
+      "prediction": "B",
+      "freq_ngram": 600,
+      "suffix_freq": 318,
+      "suffix_confidence_pct": 53.0,
+      "win_rate_pct": 58.68,
+      "total_events": 121
+    }
+  ],
+  "meta": {
+    "total_rules": 10,
+    "by_window": {
+      "9": 10,
+      "10": 0
+    },
+    "filter": {
+      "max_5consecutive_fail_prob_pct": 1.5,
+      "min_win_rate_pct": 56.83,
+      "min_total_events": 5,
+      "min_suffix_confidence_pct": 51.8
+    },
+    "download_windows": [
+      9
+    ]
+  }
+}

@@ -1,0 +1,283 @@
+winget install Microsoft.WindowsTerminal
+https://github.com/microsoft/terminal/releases
+
+sha256:83efe4572599479e9df38317a7be7feb1e2e86430432fc8d84f76df19de6cd11
+
+
+https://github.com/arche00/test_v5
+cd /c/
+
+cd /c/test_v5
+
+git clone https://github.com/arche00/test_v5.git
+
+git clone -b change_point-local https://github.com/arche00/test_v5.git
+
+git clone -b change_point-v4 https://github.com/arche00/test_v5.git
+
+git pull origin master
+
+
+cd C:\test_v5
+
+python -m venv venv
+c:\test_v5\venv\Scripts\activate
+
+
+pip install -r requirements.txt
+
+
+
+streamlit run hypothesis_validation_app.py
+
+streamlit run svg_parser_app.py
+
+streamlit run live_game_app.py 
+
+streamlit run interactive_multi_step_validation_app.py 
+
+streamlit run confidence_skip_hypothesis_analysis_app.py
+
+streamlit run optimal_threshold_finder_app.py
+
+
+./rclone.exe copy pattern_analysis_v4.db dropbox:project_db
+
+./rclone.exe copy --include "*.db" ./ dropbox:project_db
+
+
+-------------------------
+copy(document.querySelector('.rf_ri').outerHTML);
+
+
+-------------------------------
+git config --global user.email "arche0840@gmail.com"
+
+git config --global user.name "tj"
+
+git status
+
+git add .
+
+git commit -m "$(date +%Y%m%d_%H%M)"
+
+git push origin master
+
+
+--------
+
+
+-------------------------------   
+
+git checkout -b fix/training-validation-separation
+
+git pull origin fix/training-validation-separation
+
+git push origin fix/training-validation-separation
+-------------------------
+
+
+윈도우 크기=8, 최대 간격=1, 임계값=53.0%
+
+윈도우 크기=8, 최대 간격=6, 임계값=53.5%
+
+윈도우 크기=8, 최대 간격=6, 임계값=52.8%
+
+
+streamlit run optimal_threshold_finder_app_parallel.py
+
+윈도우 크기=8, 최대 간격=7, 임계값=52.9%
+
+
+Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz   2.90 GHz
+32.0GB(31.9GB 사용 가능)
+NVIDIA GeForce GTX 1070 
+
+윈도우 크기=8, 최대 간격=5, 임계값=52.8%
+
+ 윈도우 크기=8, 최대 간격=6, 임계값=52.8%
+
+윈도우 크기=8, 최대 간격=5, 임계값=53.2%
+
+윈도우 크기=8, 최대 간격=4, 임계값=52.0%
+
+윈도우 크기=8, 최대 간격=5, 임계값=51.8%
+--------------------------------------------------
+
+streamlit run optimal_threshold_finder_app_parallel.py
+streamlit run live_game_app_parallel.py 
+
+스킵 모드를 어떻게 고려할 것 인가? 
+전체 게임수를 65라고 가정 
+
+윈도우 크기=8, 최대 간격=6, 임계값=52.7%
+윈도우 크기=8, 최대 간격=6, 임계값=51.8%
+ 윈도우 크기=8, 최대 간격=6, 임계값=51.7%
+
+6/8/3/6
+52/53
+
+
+윈도우 크기=8, 최대 간격=4, 임계값=53.0%
+윈도우 크기=8, 최대 간격=4, 임계값=52.2%
+윈도우 크기=8, 최대 간격=6, 임계값=52.0%
+
+
+윈도우 크기=8, 최대 간격=5, 임계값=52.2%  260125 1030 L6
+
+
+streamlit run change_point_ngram_app.py 
+streamlit run change_point_simulation_app.py
+streamlit run live_game_change_point_app.py
+
+streamlit run change_point_simulation_app.py
+streamlit run change_point_live_game_app.py
+
+
+streamlit run change_point_hypothesis_test_app.py
+streamlit run change_point_hypothesis_test_app_clone.py
+
+
+streamlit run change_point_live_game_app_v5.py
+
+streamlit run change_point/change_point_v3_verification_test_app.py
+streamlit run change_point_live_game_app_flow_fixed.py
+
+streamlit run change_point_live_game_freq518_win50.py
+
+streamlit run change_point_live_game_agree55.py
+
+streamlit run change_point_live_game_freq518_win50.py
+
+streamlit run change_point_live_game_app_three_modes.py
+streamlit run change_point_live_game_app_three_modes_copy.py
+
+streamlit run livegame_three_modes_v1.py
+streamlit run livegame_three_modes_v2.py
+
+streamlit run change_point_incremental_validation_app.py
+
+streamlit run live_game_prefix_rules.py
+streamlit run live_game_prefix_rules_v2.py
+
+
+streamlit run results_viewer_app.py
+
+streamlit run prefix_list_extractor_app.py
+
+
+cd c:\test_v5\change_point 
+
+git checkout change_point
+git pull origin change_point
+
+git push origin change_point
+
+
+8 52 60 
+9 52 60 
+10 53 60
+11 54 65 
+12 56 70 
+
+
+git checkout -b change_point-v3
+
+git pull origin change_point-v3
+
+
+git config --global user.email "arche0840@gmail.com"
+
+git config --global user.name "tj"
+
+
+git add .
+
+git commit -m "$(date +%Y%m%d_%H%M)"
+
+git push -u origin change_point-v4
+
+
+
+
+git reset --hard origin/change_point-v2
+
+source /Users/tj/test_v5/venv/bin/activate
+cd /Users/tj/test_v5/change_point
+
+
+git push -u origin change_point-local
+
+
+윈도우 크기=10, 임계값=59.0%
+12 64 13%
+11 60
+10 56
+9 55
+
+12 56 
+11 57 
+10 55 
+9 53
+
+12 58 
+11 59 
+10 57
+9 55 
+
+11 x 
+12 64 
+윈도우 크기=10, 임계값=59.0%
+
+입력글자제한 제거 
+8글자부터 예측 가능하도록 
+
+시뮬레이션 결과 저장
+설계
+
+
+1/25까지 학
+
+
+
+ppbbbpbpbbpbbbpbppbpppppbpbbppbppbb
+
+pbbbbppbbbbppbbpbbbbpbbbpbbbppbpbbbppbbpbppbpbppbppppbbbpbp
+
+
+pppbbpbppbpbbpbpbbbpppbpppppbbbpbpppbbbppppbppbbppbpbpbp
+
+
+v3 시뮬레이션 설정 
+규칙에 적용되는 신뢰도
+에 
+가중치 기반 신뢰도 (무조건 사용, %)
+가중치 신뢰도 최소 (%)
+이 남아 있는데 
+
+이 설정과 상관없이 
+의도한 규칙대로 시뮬레이션이 작동하는건지 파악해줘 
+v3 규칙에서 가중치 기반 신뢰도는 사용하지 않아 
+
+
+3452
+
+pppbpbbppbpppbppbbbbbpbpbbbbbbpbbbbpbppppbppbpbpbbppbbppbpbppppbbpp
+
+
+ppbpbppb
+ppbpbppbbbpbbp
+
+
+ppppbppbppbpppppbpbppbpbpbpppppbpbbppbpppbpbpbbbpppbpbbpppppppbbpp
+
+
+52 
+
+
+pppbpbppbpbbbbpbppbp
+
+
+
+
+streamlit run change_point_hypothesis_test_app2.py

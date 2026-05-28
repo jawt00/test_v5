@@ -1,0 +1,91 @@
+{
+  "filter_conditions": {
+    "max_fail_pct": 0.9999999999999997,
+    "min_win_rate_pct": 60.19,
+    "min_total_events_win9": 150,
+    "min_total_events_win10": 15,
+    "min_suffix_confidence_pct": 51.8
+  },
+  "rules": [
+    {
+      "prefix": "bpbbpbpb",
+      "prediction": "P"
+    },
+    {
+      "prefix": "pbpbppbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bpbbbpbbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bpbbbppbb",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bpbpppbbb",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bppbbppbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bppbpbpbb",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bppbppppp",
+      "prediction": "P"
+    },
+    {
+      "prefix": "bpppbbppb",
+      "prediction": "B"
+    },
+    {
+      "prefix": "bpppbpbbb",
+      "prediction": "P"
+    },
+    {
+      "prefix": "bppppppbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "pbbbbbbpb",
+      "prediction": "B"
+    },
+    {
+      "prefix": "pbbbbppbb",
+      "prediction": "P"
+    },
+    {
+      "prefix": "pbbbpbpbb",
+      "prediction": "B"
+    },
+    {
+      "prefix": "pbbpppbbb",
+      "prediction": "P"
+    },
+    {
+      "prefix": "pbpbpbpbp",
+      "prediction": "P"
+    },
+    {
+      "prefix": "pbpbppbbb",
+      "prediction": "P"
+    },
+    {
+      "prefix": "pbpbpppbp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "pbppbbbpp",
+      "prediction": "B"
+    },
+    {
+      "prefix": "pbpppppbp",
+      "prediction": "B"
+    }
+  ]
+}

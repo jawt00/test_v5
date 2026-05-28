@@ -1,0 +1,5 @@
+﻿Step,Position,Anchor,Window Size,Prefix,예측,실제값,일치,신뢰도,스킵 사유
+4,20,12,9,pbpbbppb,b,b,✅,50.7%,
+3,11,1,11,bppbbppppp,p,b,❌,52.6%,
+2,10,1,10,bppbbpppp,b,p,❌,54.0%,
+1,9,1,9,bppbbppp,b,p,❌,56.1%,

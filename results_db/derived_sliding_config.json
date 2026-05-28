@@ -1,0 +1,17 @@
+{
+  "conf_safe_low": 51.3,
+  "conf_high": 55.0,
+  "wr_strict": 52.0,
+  "wr_safe": 49.9,
+  "wr_relaxed": 48.0,
+  "_meta": {
+    "n_low": 2083,
+    "n_mid": 1598,
+    "n_high": 200,
+    "missed_opportunities_low": 1013,
+    "missed_opportunities_mid": 840,
+    "missed_opportunities_high": 98,
+    "missed_opportunities_total": 1951,
+    "min_success_rate_pct": 100.0
+  }
+}

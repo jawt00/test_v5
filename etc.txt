@@ -15,6 +15,8 @@ git clone -b change_point-local https://github.com/arche00/test_v5.git
 
 git clone -b change_point-v4 https://github.com/arche00/test_v5.git
 
+git clone -b change_point-v4 https://github.com/jawt00/test_v5.git
+
 git pull origin master
 
 
@@ -191,12 +193,26 @@ git config --global user.email "arche0840@gmail.com"
 git config --global user.name "tj"
 
 
+
 git add .
 
 git commit -m "$(date +%Y%m%d_%H%M)"
 
 git push -u origin change_point-v4
 
+
+
+git config --global user.email "arche0088@gmail.com"
+
+git config --global user.name "jawt00"
+
+git lfs prune
+
+git add .
+
+git commit -m "$(date +%Y%m%d_%H%M)"
+
+git push -u origin change_point-v4
 
 
 

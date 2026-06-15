@@ -136,7 +136,7 @@ streamlit run change_point_simulation_app.py
 streamlit run change_point_live_game_app.py
 
 
-streamlit run change_point_hypothesis_test_app.py
+
 streamlit run change_point_hypothesis_test_app_clone.py
 
 

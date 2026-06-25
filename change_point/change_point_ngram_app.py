@@ -718,7 +718,7 @@ def main():
         
         1. **SVG 코드 입력 및 파싱**
            - SVG 코드를 텍스트 영역에 붙여넣고 '파싱' 버튼 클릭
-           - 현재 지원하는 클래스명: `wI_wN` (메인 컨테이너), `wI_wR` (행), `wI_wS` (셀)
+           - 현재 지원하는 클래스명: `xO_xT` (메인 컨테이너), `xO_xb` (행), `xO_xV` (셀)
            - 브라우저에서 그리드 복사: 개발자도구 콘솔에 `copy(document.querySelector('.xr_xw').outerHTML);` 실행
            - 파싱된 Grid String과 시각화가 표시됩니다
         

@@ -1,0 +1,58 @@
+[
+  {
+    "prefix": "bbpbpbbbb",
+    "prediction": "P"
+  },
+  {
+    "prefix": "bbpbpbppb",
+    "prediction": "B"
+  },
+  {
+    "prefix": "bbpbpbppp",
+    "prediction": "P"
+  },
+  {
+    "prefix": "bbpppbppb",
+    "prediction": "P"
+  },
+  {
+    "prefix": "bbpppbppp",
+    "prediction": "B"
+  },
+  {
+    "prefix": "bbppppbpb",
+    "prediction": "B"
+  },
+  {
+    "prefix": "ppbbbbpbb",
+    "prediction": "P"
+  },
+  {
+    "prefix": "ppbbpbbbp",
+    "prediction": "B"
+  },
+  {
+    "prefix": "ppbbpbbpp",
+    "prediction": "B"
+  },
+  {
+    "prefix": "ppbppbbbp",
+    "prediction": "P"
+  },
+  {
+    "prefix": "ppbppbppp",
+    "prediction": "P"
+  },
+  {
+    "prefix": "ppbpppbbb",
+    "prediction": "P"
+  },
+  {
+    "prefix": "ppbpbpbpp",
+    "prediction": "B"
+  },
+  {
+    "prefix": "ppbpbpppp",
+    "prediction": "B"
+  }
+]

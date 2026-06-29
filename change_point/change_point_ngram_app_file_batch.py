@@ -1,0 +1,841 @@
+"""
+Change-point Detection 기반 N-gram 생성 앱 (HTML 배치 업로드)
+여러 HTML 파일을 일괄 파싱하고, 파일별로 확인 후 개별 DB 저장
+"""
+
+import streamlit as st
+import pandas as pd
+import os
+import sys
+import time
+
+# 상위 디렉토리의 모듈 import를 위한 경로 추가
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import svg_parser_module as _svg_parser
+from svg_parser_module import (
+    parse_bead_road_svg,
+    grid_to_string_column_wise,
+    get_change_point_db_connection,
+    create_change_point_preprocessed_grid_strings_table,
+    create_change_point_ngram_chunks_table,
+    generate_and_save_ngram_chunks_change_point,
+    TABLE_WIDTH,
+    TABLE_HEIGHT,
+)
+# 파싱에 사용하는 메인 컨테이너 클래스명 (모듈 상수와 동기화, 없으면 기본값)
+BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'qA_qE')
+
+MAX_BATCH_FILES = 20
+
+# 페이지 설정
+st.set_page_config(
+    page_title="Change-point N-gram Generator (HTML Batch)",
+    page_icon="🔍",
+    layout="wide"
+)
+
+
+def _read_uploaded_html(uploaded_file) -> str:
+    """업로드된 HTML 파일을 텍스트로 디코딩 (인코딩 fallback 지원)"""
+    raw = uploaded_file.getvalue()
+    for encoding in ("utf-8", "utf-8-sig", "cp949", "euc-kr", "latin-1"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("HTML 파일 인코딩을 확인할 수 없습니다.")
+
+def _validate_uploads(files):
+    """업로드 파일 수 검증. (ok, error_message) 반환"""
+    if not files:
+        return False, "HTML 파일을 선택해주세요."
+    if len(files) >= MAX_BATCH_FILES:
+        return False, f"한 번에 {MAX_BATCH_FILES}개 미만의 파일만 업로드할 수 있습니다. (현재 {len(files)}개)"
+    return True, None
+
+
+def _parse_html_content(html: str) -> dict:
+    """HTML 문자열을 파싱하여 grid/grid_string 또는 error 반환"""
+    try:
+        parsed_grid = parse_bead_road_svg(html)
+        grid_string = grid_to_string_column_wise(parsed_grid)
+        if grid_string:
+            return {
+                "status": "parsed",
+                "grid_string": grid_string,
+                "grid": parsed_grid,
+                "error": None,
+            }
+        return {
+            "status": "error",
+            "grid_string": None,
+            "grid": parsed_grid,
+            "error": (
+                f"HTML에서 Bead Road 그리드를 찾지 못했거나 유효한 데이터가 없습니다. "
+                f"(컨테이너 클래스: .{BEAD_ROAD_MAIN_CONTAINER_CLASS})"
+            ),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "grid_string": None,
+            "grid": None,
+            "error": str(e),
+        }
+
+
+def _parse_all_files(uploaded_files) -> list:
+    """업로드 파일 목록을 순차 파싱하여 batch_items 생성"""
+    items = []
+    total = len(uploaded_files)
+    for idx, uploaded_file in enumerate(uploaded_files):
+        with st.spinner(f"파싱 중... ({idx + 1}/{total}) {uploaded_file.name}"):
+            try:
+                html = _read_uploaded_html(uploaded_file)
+                result = _parse_html_content(html)
+            except ValueError as e:
+                result = {"status": "error", "grid_string": None, "grid": None, "error": str(e)}
+            except Exception as e:
+                result = {"status": "error", "grid_string": None, "grid": None, "error": str(e)}
+
+            items.append({
+                "index": idx,
+                "filename": uploaded_file.name,
+                "status": result["status"],
+                "grid_string": result.get("grid_string"),
+                "grid": result.get("grid"),
+                "error": result.get("error"),
+                "record_id": None,
+            })
+    return items
+
+
+def _render_batch_summary(items):
+    """배치 파싱 결과 요약"""
+    total = len(items)
+    parsed = sum(1 for it in items if it["status"] == "parsed")
+    saved = sum(1 for it in items if it["status"] == "saved")
+    errors = sum(1 for it in items if it["status"] == "error")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("전체", total)
+    with col2:
+        st.metric("파싱 성공", parsed)
+    with col3:
+        st.metric("저장 완료", saved)
+    with col4:
+        st.metric("오류", errors)
+
+
+def _status_label(status):
+    labels = {"parsed": "파싱완료", "saved": "저장완료", "error": "오류"}
+    return labels.get(status, status)
+
+
+def _render_batch_item(item, idx, expanded=False):
+    """파일별 expander: 그리드 확인 및 개별 DB 저장"""
+    length_info = ""
+    if item.get("grid_string"):
+        length_info = f" — 길이 {len(item['grid_string'])}"
+    label = f"[{idx + 1}] {item['filename']} — {_status_label(item['status'])}{length_info}"
+
+    with st.expander(label, expanded=expanded):
+        if item["status"] == "error":
+            st.error(item["error"])
+            if item.get("grid"):
+                st.warning("일부 Grid 데이터:")
+                display_grid_visualization(item["grid"])
+            return
+
+        if item["status"] == "saved":
+            st.success(f"DB 저장 완료 (Record ID: {item['record_id']})")
+            st.info("ngram_chunks_change_point도 자동으로 생성되어 저장되었습니다.")
+
+        st.markdown("**파싱된 Grid String:**")
+        st.code(item["grid_string"], language=None)
+
+        if item.get("grid"):
+            display_grid_visualization(item["grid"])
+
+        if item["status"] == "parsed":
+            if st.button("💾 DB 저장", key=f"save_batch_{idx}", use_container_width=True):
+                try:
+                    with st.spinner("DB 저장 중..."):
+                        record_id = save_grid_string_to_db(item["grid_string"])
+                    st.session_state.batch_items[idx]["status"] = "saved"
+                    st.session_state.batch_items[idx]["record_id"] = record_id
+                    st.session_state.parsed_grid_string = item["grid_string"]
+                    st.session_state.parsed_grid = item["grid"]
+                    if "cached_recent_data" in st.session_state:
+                        del st.session_state.cached_recent_data
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"DB 저장 중 오류: {str(e)}")
+                    import traceback
+                    st.error(traceback.format_exc())
+
+        elif item["status"] == "saved":
+            if st.button("Change-point 섹션에 표시", key=f"select_batch_{idx}", use_container_width=True):
+                st.session_state.parsed_grid_string = item["grid_string"]
+                st.session_state.parsed_grid = item["grid"]
+                st.rerun()
+
+
+def display_grid_visualization(grid):
+    """
+    파싱된 Grid를 시각적으로 표시
+    """
+    st.markdown("### 📊 Grid 시각화")
+    
+    # Grid 데이터프레임 생성 (행과 열을 반대로 표시)
+    display_data = []
+    # 통계 정보를 한 번의 순회로 계산 (성능 최적화)
+    total_cells = TABLE_WIDTH * TABLE_HEIGHT
+    filled_cells = 0
+    b_count = 0
+    p_count = 0
+    t_count = 0
+    
+    for row_idx in range(TABLE_HEIGHT):
+        row_data = []
+        for col_idx in range(TABLE_WIDTH):
+            cell_value = grid[col_idx][row_idx]
+            if cell_value == 'b':
+                row_data.append('🔴 B')
+                filled_cells += 1
+                b_count += 1
+            elif cell_value == 'p':
+                row_data.append('🔵 P')
+                filled_cells += 1
+                p_count += 1
+            elif cell_value == 't':
+                row_data.append('⚪ T')
+                filled_cells += 1
+                t_count += 1
+            else:
+                row_data.append('⚫')
+        display_data.append(row_data)
+    
+    # 컬럼명 생성
+    columns = [f"Col {i+1}" for i in range(TABLE_WIDTH)]
+    
+    # 데이터프레임 생성 및 표시
+    df = pd.DataFrame(display_data, columns=columns)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    # 통계 정보
+    col_stat1, col_stat2, col_stat3, col_stat4, col_stat5 = st.columns(5)
+    with col_stat1:
+        st.metric("총 셀 수", total_cells)
+    with col_stat2:
+        st.metric("채워진 셀", filled_cells)
+    with col_stat3:
+        st.metric("🔴 B", b_count)
+    with col_stat4:
+        st.metric("🔵 P", p_count)
+    with col_stat5:
+        st.metric("⚪ T", t_count)
+
+
+def detect_change_points(grid_string):
+    """
+    Change-point Detection: 변화점 감지 및 앵커 위치 반환
+    """
+    anchors = []
+    change_points = []
+    
+    for i in range(len(grid_string) - 1):
+        if grid_string[i] != grid_string[i+1]:
+            # 변화점 감지
+            change_points.append({
+                'index': i,
+                'from': grid_string[i],
+                'to': grid_string[i+1],
+                'anchor': i  # 변화 이전 위치가 앵커
+            })
+            anchors.append(i)
+    
+    # 중복 제거
+    anchors = sorted(list(set(anchors)))
+    
+    return anchors, change_points
+
+
+def load_recent_grid_strings():
+    """
+    최근 저장된 Grid String 목록 로드
+    """
+    try:
+        conn = get_change_point_db_connection()
+        if conn is None:
+            return pd.DataFrame()
+        
+        query = """
+            SELECT 
+                id,
+                grid_string,
+                string_length,
+                b_count,
+                p_count,
+                b_ratio,
+                p_ratio,
+                created_at
+            FROM preprocessed_grid_strings
+            ORDER BY created_at DESC
+            LIMIT 50
+        """
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        return df
+    except Exception as e:
+        st.error(f"데이터 로드 오류: {str(e)}")
+        return pd.DataFrame()
+
+
+def save_grid_string_to_db(grid_string):
+    """
+    Grid String을 Change-point DB에 저장
+    그리고 ngram_chunks_change_point도 자동으로 생성하여 저장
+    또한 hypothesis_validation.db에도 동기화하여 저장
+    중복된 grid_string인 경우 기존 레코드를 반환하고 새로 저장하지 않음
+    """
+    # 테이블 생성 확인
+    create_change_point_preprocessed_grid_strings_table()
+    create_change_point_ngram_chunks_table()
+    
+    conn = get_change_point_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # 통계 계산
+        string_length = len(grid_string)
+        b_count = grid_string.count('b')
+        p_count = grid_string.count('p')
+        t_count = grid_string.count('t')
+        b_ratio = (b_count / string_length * 100) if string_length > 0 else 0.0
+        p_ratio = (p_count / string_length * 100) if string_length > 0 else 0.0
+        
+        # source_session_id 생성 (hypothesis_validation.db와 동기화를 위해)
+        from datetime import datetime
+        import uuid
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        unique_id = str(uuid.uuid4())[:8]
+        source_session_id = f'change_point_svg_parse_{timestamp}_{unique_id}'
+        source_id = str(uuid.uuid4())
+        
+        # 저장
+        cursor.execute('''
+            INSERT OR IGNORE INTO preprocessed_grid_strings (
+                grid_string, source_session_id, source_id, string_length, 
+                b_count, p_count, t_count, b_ratio, p_ratio
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (grid_string, source_session_id, source_id, string_length, 
+              b_count, p_count, t_count, b_ratio, p_ratio))
+        
+        # INSERT OR IGNORE의 경우, 중복이면 rowcount가 0이 됨
+        if cursor.rowcount == 0:
+            # 중복된 경우 기존 레코드의 id를 조회
+            cursor.execute('''
+                SELECT id FROM preprocessed_grid_strings 
+                WHERE grid_string = ?
+            ''', (grid_string,))
+            result = cursor.fetchone()
+            if result:
+                record_id = result[0]
+                # 중복된 경우에도 누락된 윈도우 크기 확인 및 생성
+                # 윈도우 크기별로 확인하고 없는 것만 생성
+                target_window_sizes = [5, 6, 7, 8, 9, 10, 11, 12]
+                missing_window_sizes = []
+                for window_size in target_window_sizes:
+                    cursor.execute('''
+                        SELECT COUNT(*) FROM ngram_chunks_change_point 
+                        WHERE grid_string_id = ? AND window_size = ?
+                    ''', (record_id, window_size))
+                    existing_count = cursor.fetchone()[0]
+                    if existing_count == 0:
+                        missing_window_sizes.append(window_size)
+                
+                # 누락된 윈도우 크기가 있으면 생성
+                if missing_window_sizes:
+                    try:
+                        generate_and_save_ngram_chunks_change_point(
+                            record_id,
+                            grid_string,
+                            window_sizes=missing_window_sizes,
+                            conn=conn
+                        )
+                    except Exception as ngram_error:
+                        import warnings
+                        warnings.warn(f"ngram_chunks_change_point 생성 중 오류 발생: {str(ngram_error)}")
+                
+                conn.commit()
+                conn.close()
+                
+                # hypothesis_validation.db에도 동기화 (중복 체크)
+                try:
+                    from svg_parser_module import get_db_connection, create_preprocessed_grid_strings_table, create_ngram_chunks_table, generate_and_save_ngram_chunks
+                    import uuid
+                    from datetime import datetime
+                    
+                    # hypothesis_validation.db에 저장
+                    create_preprocessed_grid_strings_table()
+                    create_ngram_chunks_table()
+                    
+                    hv_conn = get_db_connection()
+                    hv_cursor = hv_conn.cursor()
+                    
+                    b_count = grid_string.count('b')
+                    p_count = grid_string.count('p')
+                    string_length = len(grid_string)
+                    
+                    hv_cursor.execute('''
+                        INSERT OR IGNORE INTO preprocessed_grid_strings (
+                            source_session_id, source_id, grid_string,
+                            string_length, b_count, p_count, b_ratio, p_ratio,
+                            created_at, processed_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'), datetime('now', '+9 hours'))
+                    ''', (
+                        source_session_id,
+                        source_id,
+                        grid_string,
+                        string_length,
+                        b_count,
+                        p_count,
+                        (b_count / string_length * 100) if string_length > 0 else 0,
+                        (p_count / string_length * 100) if string_length > 0 else 0
+                    ))
+                    
+                    if hv_cursor.rowcount > 0:
+                        hv_record_id = hv_cursor.lastrowid
+                        hv_conn.commit()
+                        # ngram_chunks 생성
+                        try:
+                            generate_and_save_ngram_chunks(hv_record_id, grid_string, conn=hv_conn)
+                        except Exception as ngram_error:
+                            import warnings
+                            warnings.warn(f"ngram_chunks 생성 중 오류 발생: {str(ngram_error)}")
+                    else:
+                        # 중복된 경우 기존 레코드 ID 조회
+                        hv_cursor.execute('''
+                            SELECT id FROM preprocessed_grid_strings 
+                            WHERE grid_string = ?
+                        ''', (grid_string,))
+                        result = hv_cursor.fetchone()
+                        if result:
+                            hv_record_id = result[0]
+                            # ngram_chunks가 있는지 확인
+                            hv_cursor.execute('''
+                                SELECT COUNT(*) FROM ngram_chunks 
+                                WHERE grid_string_id = ?
+                            ''', (hv_record_id,))
+                            count = hv_cursor.fetchone()[0]
+                            if count == 0:
+                                # ngram_chunks가 없으면 생성
+                                try:
+                                    generate_and_save_ngram_chunks(hv_record_id, grid_string, conn=hv_conn)
+                                except Exception as ngram_error:
+                                    import warnings
+                                    warnings.warn(f"ngram_chunks 생성 중 오류 발생: {str(ngram_error)}")
+                    
+                    hv_conn.commit()
+                    hv_conn.close()
+                except Exception as sync_error:
+                    import warnings
+                    warnings.warn(f"hypothesis_validation.db 동기화 중 오류 발생: {str(sync_error)}")
+                
+                return record_id
+            else:
+                # 예상치 못한 상황
+                raise Exception("중복 저장 시도했으나 기존 레코드를 찾을 수 없습니다.")
+        
+        record_id = cursor.lastrowid
+        conn.commit()
+        
+        # ngram_chunks_change_point 생성 및 저장 (새로 저장된 경우에만)
+        # 같은 연결을 재사용하여 락 방지
+        try:
+            generate_and_save_ngram_chunks_change_point(
+                record_id, 
+                grid_string, 
+                window_sizes=[5, 6, 7, 8, 9, 10, 11, 12],
+                conn=conn
+            )
+        except Exception as ngram_error:
+            # ngram_chunks 생성 실패해도 레코드는 저장되었으므로 경고만
+            import warnings
+            warnings.warn(f"ngram_chunks_change_point 생성 중 오류 발생 (레코드는 저장됨): {str(ngram_error)}")
+        
+        conn.close()
+        
+        # hypothesis_validation.db에도 동기화하여 저장
+        try:
+            from svg_parser_module import get_db_connection, create_preprocessed_grid_strings_table, create_ngram_chunks_table, generate_and_save_ngram_chunks
+            
+            # hypothesis_validation.db에 저장
+            create_preprocessed_grid_strings_table()
+            create_ngram_chunks_table()
+            
+            hv_conn = get_db_connection()
+            hv_cursor = hv_conn.cursor()
+            
+            b_count = grid_string.count('b')
+            p_count = grid_string.count('p')
+            string_length = len(grid_string)
+            
+            hv_cursor.execute('''
+                INSERT OR IGNORE INTO preprocessed_grid_strings (
+                    source_session_id, source_id, grid_string,
+                    string_length, b_count, p_count, b_ratio, p_ratio,
+                    created_at, processed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'), datetime('now', '+9 hours'))
+            ''', (
+                source_session_id,
+                source_id,
+                grid_string,
+                string_length,
+                b_count,
+                p_count,
+                (b_count / string_length * 100) if string_length > 0 else 0,
+                (p_count / string_length * 100) if string_length > 0 else 0
+            ))
+            
+            if hv_cursor.rowcount > 0:
+                hv_record_id = hv_cursor.lastrowid
+                hv_conn.commit()
+                # ngram_chunks 생성
+                try:
+                    generate_and_save_ngram_chunks(hv_record_id, grid_string, conn=hv_conn)
+                except Exception as ngram_error:
+                    import warnings
+                    warnings.warn(f"ngram_chunks 생성 중 오류 발생: {str(ngram_error)}")
+            else:
+                # 중복된 경우 기존 레코드 ID 조회
+                hv_cursor.execute('''
+                    SELECT id FROM preprocessed_grid_strings 
+                    WHERE grid_string = ?
+                ''', (grid_string,))
+                result = hv_cursor.fetchone()
+                if result:
+                    hv_record_id = result[0]
+                    # ngram_chunks가 있는지 확인
+                    hv_cursor.execute('''
+                        SELECT COUNT(*) FROM ngram_chunks 
+                        WHERE grid_string_id = ?
+                    ''', (hv_record_id,))
+                    count = hv_cursor.fetchone()[0]
+                    if count == 0:
+                        # ngram_chunks가 없으면 생성
+                        try:
+                            generate_and_save_ngram_chunks(hv_record_id, grid_string, conn=hv_conn)
+                        except Exception as ngram_error:
+                            import warnings
+                            warnings.warn(f"ngram_chunks 생성 중 오류 발생: {str(ngram_error)}")
+            
+            hv_conn.commit()
+            hv_conn.close()
+        except Exception as sync_error:
+            # 동기화 실패해도 Change-point DB는 저장되었으므로 경고만
+            import warnings
+            warnings.warn(f"hypothesis_validation.db 동기화 중 오류 발생 (Change-point DB는 저장됨): {str(sync_error)}")
+        
+        return record_id
+        
+    except Exception as e:
+        if conn:
+            conn.rollback()
+            conn.close()
+        raise Exception(f"DB 저장 오류: {str(e)}")
+
+
+def main():
+    st.title("🔍 Change-point Detection 기반 N-gram 생성 (HTML 배치)")
+    st.markdown("여러 HTML 파일을 일괄 파싱하고, 파일별 그리드를 확인한 뒤 개별 DB 저장합니다.")
+    st.markdown("---")
+
+    try:
+        create_change_point_preprocessed_grid_strings_table()
+        create_change_point_ngram_chunks_table()
+    except Exception as e:
+        st.warning(f"테이블 생성 확인 중 오류: {str(e)}")
+
+    st.header("📂 HTML 파일 입력 (복수)")
+    st.caption(
+        f"저장된 페이지 HTML 전체에서 Bead Road 컨테이너 (`.{BEAD_ROAD_MAIN_CONTAINER_CLASS}`) 를 자동 탐색합니다. "
+        f"한 번에 {MAX_BATCH_FILES}개 미만의 파일을 선택할 수 있습니다."
+    )
+
+    if "html_input_key_counter" not in st.session_state:
+        st.session_state.html_input_key_counter = 0
+
+    uploaded_files = st.file_uploader(
+        "HTML 파일 선택 (복수)",
+        type=["html", "htm"],
+        accept_multiple_files=True,
+        help="브라우저에서 저장한 .html 파일을 여러 개 선택할 수 있습니다.",
+        key=f"html_uploader_{st.session_state.html_input_key_counter}",
+    )
+
+    col_info, col_btn = st.columns([3, 1])
+
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        parse_all_button = st.button(
+            "🔍 일괄 파싱", type="primary", use_container_width=True, key="parse_all_html_button"
+        )
+
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄 전체 리셋", use_container_width=True, key="reset_batch_button"):
+            st.session_state.html_input_key_counter += 1
+            for key in (
+                "batch_items", "parsed_grid_string", "parsed_grid",
+                "parsing_error", "parsing_traceback", "cached_recent_data",
+            ):
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
+
+    with col_info:
+        if uploaded_files:
+            st.info(f"선택된 파일: **{len(uploaded_files)}개** — '일괄 파싱' 버튼을 클릭하세요.")
+        elif st.session_state.get("batch_items"):
+            st.info(f"파싱 완료: **{len(st.session_state.batch_items)}개** 파일 — 아래 목록에서 확인 후 개별 저장하세요.")
+        else:
+            st.info("HTML 파일을 선택한 후 '일괄 파싱' 버튼을 클릭하세요.")
+
+    if parse_all_button:
+        ok, err = _validate_uploads(uploaded_files)
+        if not ok:
+            st.warning(f"⚠️ {err}")
+        else:
+            for key in ("parsed_grid_string", "parsed_grid", "parsing_error", "parsing_traceback"):
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.session_state.batch_items = _parse_all_files(uploaded_files)
+            st.rerun()
+
+    grid_string_input = ""
+    parsed_grid = None
+
+    if st.session_state.get("batch_items"):
+        st.markdown("---")
+        st.header("📋 파싱 결과")
+        _render_batch_summary(st.session_state.batch_items)
+
+        first_unsaved = next(
+            (i for i, it in enumerate(st.session_state.batch_items) if it["status"] == "parsed"),
+            None,
+        )
+        for idx, item in enumerate(st.session_state.batch_items):
+            _render_batch_item(item, idx, expanded=(idx == first_unsaved))
+
+    elif st.session_state.get("parsed_grid_string"):
+        grid_string_input = st.session_state.parsed_grid_string
+        parsed_grid = st.session_state.get("parsed_grid")
+
+    st.markdown("---")
+    
+    # Change-point Detection 섹션 (마지막 저장/선택 항목 기준)
+    if not grid_string_input and st.session_state.get("parsed_grid_string"):
+        grid_string_input = st.session_state.parsed_grid_string
+        parsed_grid = st.session_state.get("parsed_grid")
+
+    if grid_string_input and grid_string_input.strip():
+        st.header("🔍 Change-point Detection")
+        
+        # 변화점 감지
+        anchors, change_points = detect_change_points(grid_string_input)
+        
+        col_info1, col_info2, col_info3 = st.columns(3)
+        with col_info1:
+            st.metric("Grid String 길이", len(grid_string_input))
+        with col_info2:
+            st.metric("감지된 변화점", len(change_points))
+        with col_info3:
+            st.metric("앵커 위치 수", len(anchors))
+        
+        # 변화점 상세 정보
+        if change_points:
+            st.markdown("### 변화점 상세 정보")
+            change_points_df = pd.DataFrame(change_points)
+            st.dataframe(change_points_df, use_container_width=True, hide_index=True)
+            
+            # 앵커 위치 표시
+            st.markdown("### 앵커 위치")
+            st.code(f"앵커 인덱스: {anchors}")
+        
+        # N-gram 생성 섹션 (추가 생성용 - 저장 시 이미 자동 생성됨)
+        st.markdown("---")
+        st.header("📦 추가 N-gram 생성 (선택사항)")
+        st.info("💡 DB 저장 시 기본 윈도우 크기(5, 6, 7, 8, 9, 10, 11, 12)로 N-gram이 자동 생성됩니다. 다른 윈도우 크기로 추가 생성하려면 이 섹션을 사용하세요.")
+        
+        col_gen1, col_gen2 = st.columns([2, 1])
+        
+        with col_gen1:
+            window_sizes = st.multiselect(
+                "윈도우 크기 선택",
+                options=[5, 6, 7, 8, 9, 10, 11, 12],
+                default=[],
+                key="window_sizes_select"
+            )
+        
+        # N-gram 생성 버튼
+        col_btn1, col_btn2 = st.columns([1, 4])
+        
+        with col_btn1:
+            # 저장된 grid_string_id 확인
+            saved_grid_string_id = None
+            if 'parsed_grid_string' in st.session_state:
+                try:
+                    conn = get_change_point_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        SELECT id FROM preprocessed_grid_strings 
+                        WHERE grid_string = ?
+                    ''', (st.session_state.parsed_grid_string,))
+                    result = cursor.fetchone()
+                    if result:
+                        saved_grid_string_id = result[0]
+                    conn.close()
+                except:
+                    pass
+            
+            generate_button = st.button(
+                "🚀 추가 N-gram 생성", 
+                type="primary", 
+                use_container_width=True, 
+                key="generate_ngram_button",
+                disabled=(saved_grid_string_id is None or not window_sizes)
+            )
+            
+            if saved_grid_string_id is None:
+                st.caption("⚠️ 먼저 DB에 저장해주세요")
+            elif not window_sizes:
+                st.caption("⚠️ 윈도우 크기를 선택해주세요")
+        
+        if generate_button:
+            if not window_sizes:
+                st.warning("⚠️ 윈도우 크기를 선택해주세요.")
+            elif saved_grid_string_id is None:
+                st.warning("⚠️ 먼저 '💾 DB 저장' 버튼을 클릭하여 Grid String을 저장해주세요.")
+            else:
+                try:
+                    with st.spinner("추가 N-gram 생성 중..."):
+                        # N-gram 생성 (이미 저장된 grid_string_id 사용)
+                        result = generate_and_save_ngram_chunks_change_point(
+                            saved_grid_string_id,
+                            grid_string_input,
+                            window_sizes=window_sizes
+                        )
+                        
+                        # 결과 표시
+                        st.success("✅ 추가 N-gram 생성 완료!")
+                        st.markdown("### 생성 결과")
+                        result_df = pd.DataFrame([
+                            {'윈도우 크기': k, '생성된 N-gram 수': v}
+                            for k, v in result.items()
+                        ])
+                        st.dataframe(result_df, use_container_width=True, hide_index=True)
+                        
+                        total_ngrams = sum(result.values())
+                        st.metric("총 생성된 N-gram 수", total_ngrams)
+                            
+                except Exception as e:
+                    st.error(f"❌ N-gram 생성 중 오류 발생: {str(e)}")
+                    import traceback
+                    st.error(f"상세 오류: {traceback.format_exc()}")
+    
+    st.markdown("---")
+    
+    # 저장된 데이터 목록
+    st.header("📋 저장된 데이터 목록")
+    
+    refresh_clicked = st.button("🔄 목록 새로고침", key="refresh_data_list")
+    
+    # 세션 상태에 데이터 캐시 저장
+    if 'cached_recent_data' not in st.session_state or refresh_clicked:
+        with st.spinner("데이터 로딩 중..."):
+            st.session_state.cached_recent_data = load_recent_grid_strings()
+            st.session_state.cached_recent_data_timestamp = time.time()
+    
+    df_recent = st.session_state.cached_recent_data
+    
+    if len(df_recent) > 0:
+        st.info(f"최근 저장된 데이터: {len(df_recent)}개")
+        
+        # 컬럼명 한글화
+        display_df = df_recent.copy()
+        column_mapping = {
+            'id': 'ID',
+            'grid_string': 'Grid String',
+            'string_length': '길이',
+            'b_count': 'B 개수',
+            'p_count': 'P 개수',
+            'b_ratio': 'B 비율 (%)',
+            'p_ratio': 'P 비율 (%)',
+            'created_at': '생성일시'
+        }
+        display_df = display_df.rename(columns=column_mapping)
+        
+        # 데이터 표시
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        
+        # 통계 정보
+        st.markdown("### 📊 통계 정보")
+        col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+        with col_stat1:
+            st.metric("총 레코드 수", len(df_recent))
+        with col_stat2:
+            avg_length = df_recent['string_length'].mean() if len(df_recent) > 0 else 0
+            st.metric("평균 길이", f"{avg_length:.1f}")
+        with col_stat3:
+            total_b = df_recent['b_count'].sum() if len(df_recent) > 0 else 0
+            st.metric("총 B 개수", f"{total_b:,}")
+        with col_stat4:
+            total_p = df_recent['p_count'].sum() if len(df_recent) > 0 else 0
+            st.metric("총 P 개수", f"{total_p:,}")
+    else:
+        st.info("저장된 데이터가 없습니다. HTML 파일을 파싱하고 N-gram을 생성해주세요.")
+    
+    st.markdown("---")
+    
+    # 사용 방법 안내
+    with st.expander("ℹ️ 사용 방법", expanded=False):
+        st.markdown(f"""
+        ### Change-point Detection 기반 N-gram 생성 앱 (HTML 배치) 사용 방법
+        
+        1. **HTML 파일 복수 업로드 및 일괄 파싱**
+           - `.html` 파일을 여러 개 선택 (20개 미만)
+           - '일괄 파싱' 클릭 → 각 파일에서 Bead Road 컨테이너 (`.{BEAD_ROAD_MAIN_CONTAINER_CLASS}`) 자동 탐색
+           - 파일별 expander에서 Grid String과 전체 그리드 시각화 확인
+        
+        2. **개별 DB 저장 (자동 N-gram 생성 포함)**
+           - 확인한 항목의 expander에서 '💾 DB 저장' 클릭
+           - Grid String이 데이터베이스에 저장됩니다
+           - **자동으로 Change-point Detection 기반 N-gram이 생성되어 저장됩니다** (윈도우 크기: 5, 6, 7, 8, 9, 10, 11, 12)
+        
+        3. **Change-point Detection**
+           - 저장 후 자동으로 변화점 감지 및 앵커 위치 계산
+           - 변화점 상세 정보 확인
+        
+        4. **추가 N-gram 생성 (선택사항)**
+           - 다른 윈도우 크기로 추가 생성하려면 이 섹션 사용
+           - 윈도우 크기 선택 후 '🚀 추가 N-gram 생성' 버튼 클릭
+        
+        5. **데이터 관리**
+           - 저장된 Grid String 목록 조회
+           - 생성된 N-gram 통계 확인
+        
+        ### Change-point Detection 규칙
+        - **Trigger**: `Input[i] ≠ Input[i+1]` 일 때 변화점 감지
+        - **Anchor**: 변화 감지 이전 위치 (i)를 앵커로 사용
+        - 앵커 위치에서만 N-gram 생성 (기존 슬라이딩 윈도우와 다름)
+        
+        ### 주의사항
+        - 클래스명이 변경되면 `svg_parser_module.py`의 `parse_bead_road_svg` 함수를 수정해야 합니다
+        """)
+
+
+if __name__ == "__main__":
+    main()

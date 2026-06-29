@@ -129,6 +129,8 @@ streamlit run live_game_app_parallel.py
 
 
 streamlit run change_point_ngram_app.py 
+streamlit run change_point_hypothesis_test_app.py
+
 streamlit run change_point_simulation_app.py
 streamlit run live_game_change_point_app.py
 
@@ -167,6 +169,12 @@ streamlit run results_viewer_app.py
 
 streamlit run prefix_list_extractor_app.py
 
+streamlit run pattern_predictions_compare_app.py
+
+
+streamlit run change_point_ngram_app_file.py
+
+streamlit run change_point_ngram_app_file_batch.py
 
 cd c:\test_v5\change_point 
 

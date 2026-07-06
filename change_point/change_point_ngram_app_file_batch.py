@@ -8,6 +8,9 @@ import pandas as pd
 import os
 import sys
 import time
+import html as html_module
+
+from bs4 import BeautifulSoup
 
 # 상위 디렉토리의 모듈 import를 위한 경로 추가
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -24,7 +27,7 @@ from svg_parser_module import (
     TABLE_HEIGHT,
 )
 # 파싱에 사용하는 메인 컨테이너 클래스명 (모듈 상수와 동기화, 없으면 기본값)
-BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'qA_qE')
+BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'vh_vm')
 
 MAX_BATCH_FILES = 20
 
@@ -46,6 +49,33 @@ def _read_uploaded_html(uploaded_file) -> str:
             continue
     raise ValueError("HTML 파일 인코딩을 확인할 수 없습니다.")
 
+
+# Save Page / SingleFile 등: Bead Road가 iframe srcdoc 속성 안에 저장되는 경우
+_IFRAME_SRC_ATTRS = ('srcdoc', 'data-savepage-srcdoc')
+
+
+def _parse_bead_road_html(html: str):
+    """
+    전체 HTML 또는 iframe srcdoc 내부에서 Bead Road grid 파싱.
+    최상위 DOM에서 찾지 못하면 iframe srcdoc을 html.unescape 후 재시도.
+    """
+    parsed_grid = parse_bead_road_svg(html)
+    if grid_to_string_column_wise(parsed_grid):
+        return parsed_grid
+
+    soup = BeautifulSoup(html, 'html.parser')
+    for iframe in soup.find_all('iframe'):
+        for attr in _IFRAME_SRC_ATTRS:
+            raw = iframe.get(attr)
+            if not raw or not raw.strip():
+                continue
+            inner_grid = parse_bead_road_svg(html_module.unescape(raw))
+            if grid_to_string_column_wise(inner_grid):
+                return inner_grid
+
+    return parsed_grid
+
+
 def _validate_uploads(files):
     """업로드 파일 수 검증. (ok, error_message) 반환"""
     if not files:
@@ -58,7 +88,7 @@ def _validate_uploads(files):
 def _parse_html_content(html: str) -> dict:
     """HTML 문자열을 파싱하여 grid/grid_string 또는 error 반환"""
     try:
-        parsed_grid = parse_bead_road_svg(html)
+        parsed_grid = _parse_bead_road_html(html)
         grid_string = grid_to_string_column_wise(parsed_grid)
         if grid_string:
             return {
@@ -73,7 +103,8 @@ def _parse_html_content(html: str) -> dict:
             "grid": parsed_grid,
             "error": (
                 f"HTML에서 Bead Road 그리드를 찾지 못했거나 유효한 데이터가 없습니다. "
-                f"(컨테이너 클래스: .{BEAD_ROAD_MAIN_CONTAINER_CLASS})"
+                f"(컨테이너 클래스: .{BEAD_ROAD_MAIN_CONTAINER_CLASS}, "
+                f"iframe srcdoc 포함 탐색 완료)"
             ),
         }
     except Exception as e:
@@ -562,6 +593,7 @@ def main():
     st.header("📂 HTML 파일 입력 (복수)")
     st.caption(
         f"저장된 페이지 HTML 전체에서 Bead Road 컨테이너 (`.{BEAD_ROAD_MAIN_CONTAINER_CLASS}`) 를 자동 탐색합니다. "
+        f"iframe `srcdoc`(Save Page/SingleFile 저장) 내부도 탐색합니다. "
         f"한 번에 {MAX_BATCH_FILES}개 미만의 파일을 선택할 수 있습니다."
     )
 
@@ -807,7 +839,7 @@ def main():
         
         1. **HTML 파일 복수 업로드 및 일괄 파싱**
            - `.html` 파일을 여러 개 선택 (20개 미만)
-           - '일괄 파싱' 클릭 → 각 파일에서 Bead Road 컨테이너 (`.{BEAD_ROAD_MAIN_CONTAINER_CLASS}`) 자동 탐색
+           - '일괄 파싱' 클릭 → 각 파일에서 Bead Road 컨테이너 (`.{BEAD_ROAD_MAIN_CONTAINER_CLASS}`) 자동 탐색 (iframe srcdoc 포함)
            - 파일별 expander에서 Grid String과 전체 그리드 시각화 확인
         
         2. **개별 DB 저장 (자동 N-gram 생성 포함)**

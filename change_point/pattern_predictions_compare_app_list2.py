@@ -18,6 +18,15 @@ from pattern_list2_sim_predictions import (
     build_simulation_predictions_df,
     count_simulation_predictions,
 )
+from pattern_list2_snapshot import (
+    diff_snapshots,
+    evaluate_all_runs,
+    get_active_run_id,
+    list_runs,
+    load_latest_scores,
+    load_snapshot,
+    restore_snapshot_to_current,
+)
 from pattern_predictions_compare_app import (
     _aggregate_by_ext,
     _format_display_df,
@@ -30,6 +39,54 @@ def _fmt_pred_upper(value) -> str | None:
         return None
     s = str(value).strip().upper()
     return s[0] if s else None
+
+
+FINAL_RULE_INFO: dict[str, dict[str, str]] = {
+    "R1": {
+        "label": "R1 · 3-way 일치",
+        "short": "3-way",
+        "description": "grid10 = grid12 = ngram12 일치 → 해당 예측값 사용",
+    },
+    "R2": {
+        "label": "R2 · ngram 불일치",
+        "short": "sim≠ngram",
+        "description": "sim ≠ ngram12 → ngram12 예측값 사용",
+    },
+    "R3": {
+        "label": "R3 · sim=ngram=grid10",
+        "short": "sim=ngram=grid10",
+        "description": "sim = ngram12 = grid10 → ngram12 예측값 사용",
+    },
+    "R4": {
+        "label": "R4 · pass",
+        "short": "pass",
+        "description": "위 조건 해당 없음 → 예측 없음 (pass)",
+    },
+    "unknown": {
+        "label": "미분류",
+        "short": "-",
+        "description": "pattern_list2에 없는 prefix (규칙 역산 불가)",
+    },
+}
+
+
+def classify_final_rule(row: pd.Series) -> str:
+    """compute_final_prediction과 동일 우선순위로 적용 규칙 ID 반환."""
+    if row.get("agree_new_three") is True:
+        return "R1"
+    if row.get("agree_sim_ngram") is False:
+        return "R2"
+    if row.get("agree_sim_ngram") is True and row.get("agree_sim_grid10") is True:
+        return "R3"
+    return "R4"
+
+
+def rule_label(rule_id: str) -> str:
+    return FINAL_RULE_INFO.get(rule_id, FINAL_RULE_INFO["unknown"])["label"]
+
+
+def rule_description(rule_id: str) -> str:
+    return FINAL_RULE_INFO.get(rule_id, FINAL_RULE_INFO["unknown"])["description"]
 
 
 def compute_final_prediction(row: pd.Series) -> str:
@@ -240,7 +297,9 @@ def main() -> None:
             | filtered["ws12_full"].str.contains(q, na=False)
         ]
 
-    tab1, tab2, tab3 = st.tabs(["취합 비교", "윈도우별 확장", "prefix_ext 집계"])
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["취합 비교", "윈도우별 확장", "prefix_ext 집계", "스냅샷 이력"]
+    )
 
     with tab1:
         st.markdown("### 취합 비교 — simulation ws9 prefix 기준")
@@ -324,6 +383,142 @@ def main() -> None:
     with tab3:
         st.markdown("### ws12 prefix_ext별 집계")
         st.dataframe(_aggregate_by_ext(cmp_df), use_container_width=True, hide_index=True)
+
+    with tab4:
+        st.markdown("### 스냅샷 이력 · 라이브 적중률 · 복원")
+        active_run = get_active_run_id(profile)
+        if active_run:
+            st.caption(f"현재 active run: `{active_run}`")
+
+        ec1, ec2, ec3 = st.columns([1, 1, 2])
+        with ec1:
+            eval_from = st.text_input("평가 from (created_at)", value="", key="snap_eval_from")
+        with ec2:
+            eval_to = st.text_input("평가 to (created_at)", value="", key="snap_eval_to")
+        with ec3:
+            if st.button("적중률 재계산", type="primary", key="snap_eval_btn"):
+                with st.spinner("전 run 평가 중..."):
+                    evaluate_all_runs(
+                        profile,
+                        eval_from.strip() or None,
+                        eval_to.strip() or None,
+                    )
+                st.success("평가 완료")
+                st.rerun()
+
+        ef = eval_from.strip() or None
+        et = eval_to.strip() or None
+        runs_df = list_runs(profile)
+        scores_df = load_latest_scores(profile, ef, et)
+
+        if runs_df.empty:
+            st.info("스냅샷 run 없음 — 「예측 테이블 갱신」 실행 후 생성됩니다.")
+        else:
+            show_runs = runs_df.copy()
+            if not scores_df.empty:
+                score_cols = scores_df[
+                    [
+                        "run_id",
+                        "eval_n",
+                        "accuracy_pct",
+                        "verdict",
+                        "hits",
+                        "live_n",
+                        "skipped_null_pred",
+                    ]
+                ].rename(
+                    columns={
+                        "eval_n": "평가 n",
+                        "accuracy_pct": "적중률(%)",
+                        "verdict": "판정",
+                        "hits": "적중",
+                        "live_n": "live n",
+                        "skipped_null_pred": "pass 제외",
+                    }
+                )
+                show_runs = show_runs.merge(score_cols, on="run_id", how="left")
+
+            show_runs["active"] = show_runs["is_active"].map({1: "Y", 0: ""})
+            display_cols = [
+                c
+                for c in [
+                    "run_id",
+                    "created_at",
+                    "mode",
+                    "source_max_grid_id",
+                    "snapshot_rows",
+                    "적중률(%)",
+                    "평가 n",
+                    "판정",
+                    "active",
+                ]
+                if c in show_runs.columns
+            ]
+            st.dataframe(
+                show_runs[display_cols],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            run_ids = runs_df["run_id"].tolist()
+            sc1, sc2, sc3 = st.columns([2, 2, 1])
+            with sc1:
+                sel_run = st.selectbox("Run 상세", run_ids, key="snap_sel_run")
+            with sc2:
+                diff_b = st.selectbox("Diff 비교 run", run_ids, index=min(1, len(run_ids) - 1), key="snap_diff_b")
+            with sc3:
+                min_eval = st.number_input("복원 최소 eval_n", min_value=0, value=20, key="snap_min_eval")
+
+            snap_detail = load_snapshot(profile, sel_run)
+            if not snap_detail.empty:
+                st.markdown("#### Run 스냅샷 미리보기")
+                rule_dist = snap_detail["final_rule"].value_counts().reset_index()
+                rule_dist.columns = ["final_rule", "count"]
+                st.dataframe(rule_dist, hide_index=True, use_container_width=True)
+                st.dataframe(
+                    snap_detail[
+                        [
+                            "prefix",
+                            "predicted_value",
+                            "final_rule",
+                            "confidence",
+                            "sim_pred",
+                            "ngram12_pred",
+                            "grid10_pred",
+                        ]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            if sel_run != diff_b:
+                st.markdown("#### Diff (predicted_value 변경)")
+                diff_df = diff_snapshots(profile, sel_run, diff_b)
+                if diff_df.empty:
+                    st.caption("변경된 prefix 없음")
+                else:
+                    st.dataframe(diff_df, use_container_width=True, hide_index=True)
+
+            score_row = None
+            if not scores_df.empty:
+                sub = scores_df[scores_df["run_id"] == sel_run]
+                if not sub.empty:
+                    score_row = sub.iloc[0]
+
+            if score_row is not None and min_eval > 0:
+                if int(score_row.get("eval_n") or 0) < min_eval:
+                    st.warning(
+                        f"평가 n={score_row.get('eval_n')} < 최소 {min_eval} — 복원 시 주의"
+                    )
+
+            if st.button("이 스냅샷을 현재 예측 테이블로 복원", key="snap_restore_btn"):
+                if score_row is not None and min_eval > 0 and int(score_row.get("eval_n") or 0) < min_eval:
+                    st.error(f"eval_n < {min_eval} — 복원 중단")
+                else:
+                    with st.spinner("복원 중..."):
+                        n_restored = restore_snapshot_to_current(profile, sel_run)
+                    st.success(f"복원 완료 · {n_restored}행 UPSERT · run `{sel_run}`")
+                    st.rerun()
 
 
 if __name__ == "__main__":

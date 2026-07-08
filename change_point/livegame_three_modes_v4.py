@@ -852,6 +852,20 @@ def main():
         current_table = build_current_state_table(result)
         st.dataframe(pd.DataFrame(current_table), use_container_width=True, hide_index=True)
         st.caption("다음 예측 위치 = len(grid_string). W9_10 / V3 / W9 각각 예측값(P 또는 B, NULL이면 pass, 없으면 -).")
+
+        try:
+            from livegame_prefix_rule_panel import render_prefix_rule_panel
+        except ImportError:
+            render_prefix_rule_panel = None
+        if render_prefix_rule_panel is not None:
+            render_prefix_rule_panel(
+                result,
+                predict_fn=predict_next_for_mode,
+                display_order=("window9",),
+                mode_label_fn=_mode_label,
+                st_module=st,
+            )
+
         # 테이블 바로 아래 첫 번째 줄: W9_10 예측 신뢰도 (confidence는 0~100 저장)
         r_w910 = result.get("results") or {}
         state_w910 = r_w910.get("window9_10", {}).get("state") or {}
@@ -936,7 +950,7 @@ def main():
             )
         if st.button("결과 저장", key="flow_save_results_three", type="secondary", use_container_width=True):
             try:
-                history = results.get("window9_10", {}).get("history") or []
+                history = results.get("window9", {}).get("history") or []
                 saved_keys = st.session_state.get("flow_saved_step_keys") or set()
                 inserted, new_keys = save_live_step_results(history, saved_keys)
                 st.session_state.flow_saved_step_keys = new_keys

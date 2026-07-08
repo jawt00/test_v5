@@ -24,7 +24,7 @@ from svg_parser_module import (
     TABLE_HEIGHT,
 )
 # 파싱에 사용하는 메인 컨테이너 클래스명 (모듈 상수와 동기화, 없으면 기본값)
-BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'vh_vm')
+BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'uv_uA')
 
 # 페이지 설정
 st.set_page_config(
@@ -722,7 +722,7 @@ def main():
         1. **HTML 파일 업로드 및 파싱**
            - 브라우저에서 "페이지 저장" 또는 개발자도구로 저장한 `.html` 파일 업로드
            - '파싱' 클릭 → 파일 전체에서 Bead Road 컨테이너 (`.{BEAD_ROAD_MAIN_CONTAINER_CLASS}`) 자동 탐색
-           - 현재 지원하는 클래스명: `{getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'vh_vm')}` (메인), `{getattr(_svg_parser, 'BEAD_ROAD_ROW_CLASS', 'vh_uk')}` (행), `{getattr(_svg_parser, 'BEAD_ROAD_CELL_CLASS', 'vh_vo')}` (셀)
+           - 현재 지원하는 클래스명: `{getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'uv_uA')}` (메인), `{getattr(_svg_parser, 'BEAD_ROAD_ROW_CLASS', 'uv_uF')}` (행), `{getattr(_svg_parser, 'BEAD_ROAD_CELL_CLASS', 'uv_uG')}` (셀)
            - 파싱된 Grid String과 시각화가 표시됩니다
         
         2. **DB 저장 (자동 N-gram 생성 포함)**

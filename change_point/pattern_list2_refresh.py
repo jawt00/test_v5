@@ -53,6 +53,7 @@ class RefreshResult:
     upserted_grid: int = 0
     upserted_ngram: int = 0
     upserted_sim: int = 0
+    snapshot_run_id: str = ""
     refreshed_at: str = ""
     mode: str = "incremental"
     extra: dict = field(default_factory=dict)
@@ -132,9 +133,12 @@ def run_refresh(
     - full: staging 전량 재적재
     - sim_only: mid sync 생략, sim UPSERT만
     """
-    if final_pred_fn is None:
-        from pattern_predictions_compare_app_list2 import compute_final_prediction
+    from pattern_predictions_compare_app_list2 import (
+        classify_final_rule,
+        compute_final_prediction,
+    )
 
+    if final_pred_fn is None:
         final_pred_fn = compute_final_prediction
 
     max_id = get_max_source_grid_string_id()
@@ -190,6 +194,20 @@ def run_refresh(
             )
         parts.append(f"sim={result.upserted_sim}")
         result.message = " · ".join(parts)
+
+        from pattern_list2_snapshot import capture_snapshot_after_refresh
+
+        run_id = capture_snapshot_after_refresh(
+            profile,
+            result,
+            final_pred_fn,
+            classify_final_rule,
+            set_active=True,
+        )
+        if run_id:
+            result.snapshot_run_id = run_id
+            result.message += f" · snapshot={run_id}"
+
         return result
     except Exception as e:
         result.status = "error"

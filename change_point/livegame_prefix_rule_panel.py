@@ -86,7 +86,6 @@ def _load_rule_lookup() -> dict[str, dict]:
     return out
 
 
-@lru_cache(maxsize=1)
 def _load_live_prefix_stats() -> dict[str, dict]:
     if not DB_PATH.is_file():
         return {}

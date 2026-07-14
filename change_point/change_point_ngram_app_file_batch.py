@@ -8,16 +8,12 @@ import pandas as pd
 import os
 import sys
 import time
-import html as html_module
-
-from bs4 import BeautifulSoup
 
 # 상위 디렉토리의 모듈 import를 위한 경로 추가
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import svg_parser_module as _svg_parser
 from svg_parser_module import (
-    parse_bead_road_svg,
     grid_to_string_column_wise,
     get_change_point_db_connection,
     create_change_point_preprocessed_grid_strings_table,
@@ -26,6 +22,8 @@ from svg_parser_module import (
     TABLE_WIDTH,
     TABLE_HEIGHT,
 )
+# [OPTIONAL P/B/T] 제거 시 아래 import 및 _parse_bead_road_html 내 호출 삭제
+from svg_parser_pbt_extension import parse_bead_road_svg_with_pbt_fallback
 # 파싱에 사용하는 메인 컨테이너 클래스명 (모듈 상수와 동기화, 없으면 기본값)
 BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'uv_uA')
 
@@ -50,29 +48,12 @@ def _read_uploaded_html(uploaded_file) -> str:
     raise ValueError("HTML 파일 인코딩을 확인할 수 없습니다.")
 
 
-# Save Page / SingleFile 등: Bead Road가 iframe srcdoc 속성 안에 저장되는 경우
-_IFRAME_SRC_ATTRS = ('srcdoc', 'data-savepage-srcdoc')
-
-
 def _parse_bead_road_html(html: str):
     """
     전체 HTML 또는 iframe srcdoc 내부에서 Bead Road grid 파싱.
-    최상위 DOM에서 찾지 못하면 iframe srcdoc을 html.unescape 후 재시도.
+    한글 파서 실패 시 P/B/T 파서로 fallback (iframe srcdoc 포함).
     """
-    parsed_grid = parse_bead_road_svg(html)
-    if grid_to_string_column_wise(parsed_grid):
-        return parsed_grid
-
-    soup = BeautifulSoup(html, 'html.parser')
-    for iframe in soup.find_all('iframe'):
-        for attr in _IFRAME_SRC_ATTRS:
-            raw = iframe.get(attr)
-            if not raw or not raw.strip():
-                continue
-            inner_grid = parse_bead_road_svg(html_module.unescape(raw))
-            if grid_to_string_column_wise(inner_grid):
-                return inner_grid
-
+    parsed_grid, _ = parse_bead_road_svg_with_pbt_fallback(html)
     return parsed_grid
 
 

@@ -176,6 +176,10 @@ streamlit run change_point_ngram_app_file.py
 
 streamlit run change_point_ngram_app_file_batch.py
 
+streamlit run change_point/live_w9_insights_app.py
+
+streamlit run pattern_predictions_compare_app_list2.py
+
 cd c:\test_v5\change_point 
 
 git checkout change_point
@@ -220,7 +224,7 @@ git add .
 
 git commit -m "$(date +%Y%m%d_%H%M)"
 
-git push -u origin change_point-v4
+git push -u origin change_point-v5git push -u origin change_point-v4
 
 
 

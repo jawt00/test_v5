@@ -8,7 +8,6 @@ import pandas as pd
 import os
 import time
 from svg_parser_module import (
-    parse_bead_road_svg,
     grid_to_string_column_wise,
     save_parsed_grid_string_to_db,
     create_preprocessed_grid_strings_table,
@@ -16,6 +15,8 @@ from svg_parser_module import (
     TABLE_WIDTH,
     TABLE_HEIGHT
 )
+# [OPTIONAL P/B/T] 제거 시 아래 import 및 파싱 블록 삭제
+from svg_parser_pbt_extension import parse_bead_road_svg_with_pbt_fallback
 
 # 페이지 설정
 st.set_page_config(
@@ -164,6 +165,8 @@ def main():
                 del st.session_state.parsing_error
             if 'parsing_traceback' in st.session_state:
                 del st.session_state.parsing_traceback
+            if 'parser_used' in st.session_state:
+                del st.session_state.parser_used
             st.rerun()
     
     with col_svg1:
@@ -184,12 +187,15 @@ def main():
                 del st.session_state.parsing_error
             if 'parsing_traceback' in st.session_state:
                 del st.session_state.parsing_traceback
+            if 'parser_used' in st.session_state:
+                del st.session_state.parser_used
             
             # 파싱 실행
             with st.spinner("SVG 파싱 중..."):
                 try:
-                    # SVG 파싱
-                    parsed_grid = parse_bead_road_svg(svg_code_input)
+                    # [OPTIONAL P/B/T] 한글 + P/B/T fallback 파싱
+                    parsed_grid, parser_used = parse_bead_road_svg_with_pbt_fallback(svg_code_input)
+                    st.session_state.parser_used = parser_used
                     
                     # Grid를 문자열로 변환
                     grid_string_parsed = grid_to_string_column_wise(parsed_grid)
@@ -215,6 +221,9 @@ def main():
     
     # 파싱 결과 표시 (별도 렌더링으로 분리)
     if 'parsed_grid_string' in st.session_state and st.session_state.parsed_grid_string:
+        parser_label = st.session_state.get('parser_used', 'korean')
+        if parser_label == 'pbt':
+            st.info("P/B/T 영문 마크업 파서로 파싱되었습니다.")
         st.success(f"✅ 파싱 완료! Grid String 길이: {len(st.session_state.parsed_grid_string)}")
         
         # DB 저장 기능 (파싱 완료 메시지 바로 아래에 표시)
@@ -331,10 +340,11 @@ def main():
         
         1. **SVG 코드 입력**
            - SVG 코드를 텍스트 영역에 붙여넣으세요
-           - 현재 지원하는 클래스명: `xO_xT' (메인 컨테이너), `xO_xb` (행), `xO_xV` (셀)
+           - 현재 지원하는 클래스명: `uv_uA` (메인 컨테이너), `uv_uF` (행), `uv_uG` (셀)
         
         2. **파싱 실행**
            - "파싱" 버튼을 클릭하여 SVG를 파싱합니다
+           - 한글(플/뱅/무) 또는 영문(P/B/T) 마크업을 자동 감지합니다
            - 파싱된 Grid String과 시각화가 표시됩니다
         
         3. **DB 저장**

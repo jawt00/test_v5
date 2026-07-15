@@ -1,6 +1,9 @@
 """
 pattern_list2 예측 스냅샷 · 라이브 적중률 평가 · 현재 테이블 복원.
 
+list2 프로필은 테스트 완료 전까지 db_backup/pattern_list2_TEST.db 대상.
+운영 라이브 DB(pattern_list2.db)와 분리됨.
+
   python3 change_point/pattern_list2_snapshot.py --list-runs
   python3 change_point/pattern_list2_snapshot.py --eval --from 2026-06-01 --to 2026-06-25
   python3 change_point/pattern_list2_snapshot.py --restore RUN_ID
@@ -43,7 +46,7 @@ TABLE_RUNS = "prediction_build_runs"
 TABLE_SNAPSHOTS = "simulation_predictions_change_point_snapshots"
 TABLE_SCORES = "prediction_run_live_scores"
 
-RULE_VERSION = "final_pred_v1"
+RULE_VERSION = "final_pred_v2"
 STATE_KEY_ACTIVE_SNAPSHOT = "active_snapshot_run_id"
 STATE_KEY_RESTORED_AT = "restored_at"
 

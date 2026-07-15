@@ -26,7 +26,7 @@ FINAL_RULE_INFO = {
     },
     "R2": {
         "label": "R2 · ngram 불일치",
-        "description": "sim ≠ ngram12 → ngram12 예측값 사용",
+        "description": "sim ≠ ngram12 → sim 예측값 사용",
     },
     "R3": {
         "label": "R3 · sim=ngram=grid10",
@@ -86,10 +86,11 @@ def _load_rule_lookup() -> dict[str, dict]:
     return out
 
 
-def _load_live_prefix_stats() -> dict[str, dict]:
-    if not DB_PATH.is_file():
+def _load_live_prefix_stats(db_path: Path | None = None) -> dict[str, dict]:
+    path = Path(db_path) if db_path is not None else DB_PATH
+    if not path.is_file():
         return {}
-    conn = sqlite3.connect(DB_PATH, timeout=20.0)
+    conn = sqlite3.connect(path, timeout=20.0)
     try:
         df = pd.read_sql_query(
             f"""
@@ -146,12 +147,13 @@ def build_prefix_rule_panel_rows(
     predict_fn,
     display_order: tuple[str, ...],
     mode_label_fn,
+    db_path: Path | None = None,
 ) -> list[dict]:
     """현재 포지션 예측 prefix별 규칙·라이브 적중률 행 생성."""
     gs = flow_result.get("grid_string") or ""
     results = flow_result.get("results") or {}
     rule_map = _load_rule_lookup()
-    stats_map = _load_live_prefix_stats()
+    stats_map = _load_live_prefix_stats(db_path)
     unknown = FINAL_RULE_INFO["unknown"]
     rows: list[dict] = []
 
@@ -213,6 +215,7 @@ def render_prefix_rule_panel(
     display_order: tuple[str, ...],
     mode_label_fn,
     st_module,
+    db_path: Path | None = None,
 ) -> None:
     """예측값 테이블 아래 규칙·적중률 패널 (ENABLED=False면 no-op)."""
     if not ENABLED:
@@ -223,14 +226,16 @@ def render_prefix_rule_panel(
         predict_fn,
         display_order,
         mode_label_fn,
+        db_path=db_path,
     )
     if not rows:
         return
 
+    stats_db = Path(db_path) if db_path is not None else DB_PATH
     st_module.markdown("#### 예측 prefix 규칙 · 라이브 적중률 (W9)")
     st_module.caption(
         "윈도우 9 · list2 취합비교 결정 규칙(R1~R3) · ws9 prefix · "
-        f"적중률=`{LIVE_STEP_TABLE}` window_size=9 누적"
+        f"적중률=`{LIVE_STEP_TABLE}` @ `{stats_db.name}` window_size=9 누적"
     )
 
     cols = [

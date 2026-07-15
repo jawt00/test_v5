@@ -7,8 +7,31 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CHANGE_POINT_DIR = PROJECT_ROOT / "change_point"
+DB_BACKUP_DIR = CHANGE_POINT_DIR / "db_backup"
 
 SOURCE_DB = CHANGE_POINT_DIR / "change_point_ngram.db"
+
+# 라이브 앱(livegame_three_modes_v4)이 읽는 운영 DB — 갱신 앱에서 쓰지 않음.
+LIST2_LIVE_PREDICTIONS_DB = CHANGE_POINT_DIR / "pattern_list2.db"
+# 예측 테이블 갱신/비교/스냅샷 파이프라인 전용 테스트 DB.
+LIST2_TEST_PREDICTIONS_DB = DB_BACKUP_DIR / "pattern_list2_TEST.db"
+
+__all__ = [
+    "PROJECT_ROOT",
+    "CHANGE_POINT_DIR",
+    "DB_BACKUP_DIR",
+    "SOURCE_DB",
+    "LIST2_LIVE_PREDICTIONS_DB",
+    "LIST2_TEST_PREDICTIONS_DB",
+    "GRID_CSV_NAME",
+    "NGRAM_CSV_NAME",
+    "TABLE_GRID",
+    "TABLE_NGRAM",
+    "TABLE_SIM",
+    "PatternListProfile",
+    "PROFILES",
+    "get_profile",
+]
 
 GRID_CSV_NAME = "grid_string_prefix_chunks.csv"
 NGRAM_CSV_NAME = "ngram_chunks_ws12.csv"
@@ -25,6 +48,7 @@ class PatternListProfile:
     export_dir: Path
     predictions_db: Path
     json_name_prefix: str
+    is_test_db: bool = False
 
 
 PROFILES: dict[str, PatternListProfile] = {
@@ -39,8 +63,11 @@ PROFILES: dict[str, PatternListProfile] = {
         name="list2",
         pattern_csv=PROJECT_ROOT / "pattern_list2.csv",
         export_dir=CHANGE_POINT_DIR / "pattern_list2_exports",
-        predictions_db=CHANGE_POINT_DIR / "pattern_list2.db",
+        # 테스트 완료 전까지 갱신 파이프라인은 TEST DB만 사용.
+        # 라이브는 LIST2_LIVE_PREDICTIONS_DB (pattern_list2.db) 고정.
+        predictions_db=LIST2_TEST_PREDICTIONS_DB,
         json_name_prefix="prefix_list2_new_3way_agree",
+        is_test_db=True,
     ),
 }
 

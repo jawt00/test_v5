@@ -15,9 +15,10 @@ TABLE_WIDTH = 15
 TABLE_HEIGHT = 6
 
 # [유지보수] Bead Road 그리드 HTML 클래스명 (변경 시 parse_bead_road_svg 및 docstring 동기화)
-BEAD_ROAD_MAIN_CONTAINER_CLASS ='xO_xT'
-BEAD_ROAD_ROW_CLASS ='xO_xb'
-BEAD_ROAD_CELL_CLASS ='xO_xV'
+# 2026-07-15: xO_xT/xO_xb/xO_xV → uv_uA/uv_uF/uv_uG
+BEAD_ROAD_MAIN_CONTAINER_CLASS = 'uv_uA'
+BEAD_ROAD_ROW_CLASS = 'uv_uF'
+BEAD_ROAD_CELL_CLASS = 'uv_uG'
 
 # DB 경로 (hypothesis_validation_app.py와 동일한 DB 사용)
 DB_PATH = 'hypothesis_validation.db'
@@ -95,11 +96,12 @@ def parse_bead_road_svg(svg_code):
                     if fill_color:
                         svg_colors.append(fill_color)
             result = ''
-            if '플' in text_content:
+            text_upper = text_content.upper()
+            if '플' in text_content or text_upper == 'P':
                 result = 'p'
-            elif '뱅' in text_content:
+            elif '뱅' in text_content or text_upper == 'B':
                 result = 'b'
-            elif '무' in text_content:
+            elif '무' in text_content or text_upper == 'T':
                 result = 't'
             elif svg_colors:
                 for color in svg_colors:

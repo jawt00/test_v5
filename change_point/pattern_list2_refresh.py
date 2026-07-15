@@ -4,6 +4,9 @@ pattern_list2 예측 테이블 수동 갱신 오케스트레이터.
 사용자가 CLI 또는 compare list2 앱 버튼으로 명시 실행할 때만 동작.
 자동 폴링·v4 저장 hook 없음.
 
+list2 프로필은 테스트 완료 전까지 db_backup/pattern_list2_TEST.db 만 갱신한다.
+라이브(pattern_list2.db)는 livegame_three_modes_v4 전용.
+
   python3 change_point/pattern_list2_refresh.py --profile list2
   python3 change_point/pattern_list2_refresh.py --profile list2 --full
   python3 change_point/pattern_list2_refresh.py --profile list2 --sim-only
@@ -223,6 +226,11 @@ def main() -> None:
     args = parser.parse_args()
 
     profile = get_profile(args.profile)
+    print(f"profile: {profile.name}")
+    print(f"predictions_db: {profile.predictions_db}")
+    if getattr(profile, "is_test_db", False):
+        print("NOTE: TEST DB mode — live pattern_list2.db is not modified")
+
     result = run_refresh(profile, full=args.full, sim_only=args.sim_only)
 
     print(f"status: {result.status}")

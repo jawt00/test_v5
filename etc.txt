@@ -15,7 +15,7 @@ git clone -b change_point-local https://github.com/arche00/test_v5.git
 
 git clone -b change_point-v4 https://github.com/arche00/test_v5.git
 
-git clone -b change_point-v4 https://github.com/jawt00/test_v5.git
+git clone -b change_point-v5 https://github.com/jawt00/test_v5.git
 
 git pull origin master
 
@@ -127,8 +127,17 @@ streamlit run live_game_app_parallel.py
 
 윈도우 크기=8, 최대 간격=5, 임계값=52.2%  260125 1030 L6
 
+--server.portAutoServerPort=true
+
 
 streamlit run change_point_ngram_app.py 
+streamlit run change_point_ngram_app_file_batch.py --server.port 8502
+
+streamlit run pattern_predictions_compare_app_list2.py --server.port 8503
+
+streamlit run livegame_three_modes_v4_TEST.py --server.port 8504
+
+
 streamlit run change_point_hypothesis_test_app.py
 
 streamlit run change_point_simulation_app.py
@@ -201,6 +210,7 @@ git config --global user.email "arche0840@gmail.com"
 git config --global user.name "tj"
 
 
+git add -A
 
 git add .
 
@@ -215,6 +225,8 @@ git config --global user.email "arche0088@gmail.com"
 git config --global user.name "jawt00"
 
 git lfs prune
+
+git add -A
 
 git add .
 
@@ -263,15 +275,6 @@ git push -u origin change_point-local
 1/25까지 학
 
 
-
-ppbbbpbpbbpbbbpbppbpppppbpbbppbppbb
-
-pbbbbppbbbbppbbpbbbbpbbbpbbbppbpbbbppbbpbppbpbppbppppbbbpbp
-
-
-pppbbpbppbpbbpbpbbbpppbpppppbbbpbpppbbbppppbppbbppbpbpbp
-
-
 v3 시뮬레이션 설정 
 규칙에 적용되는 신뢰도
 에 
@@ -282,26 +285,6 @@ v3 시뮬레이션 설정
 이 설정과 상관없이 
 의도한 규칙대로 시뮬레이션이 작동하는건지 파악해줘 
 v3 규칙에서 가중치 기반 신뢰도는 사용하지 않아 
-
-
-3452
-
-pppbpbbppbpppbppbbbbbpbpbbbbbbpbbbbpbppppbppbpbpbbppbbppbpbppppbbpp
-
-
-ppbpbppb
-ppbpbppbbbpbbp
-
-
-ppppbppbppbpppppbpbppbpbpbpppppbpbbppbpppbpbpbbbpppbpbbpppppppbbpp
-
-
-52 
-
-
-pppbpbppbpbbbbpbppbp
-
-
 
 
 streamlit run change_point_hypothesis_test_app2.py

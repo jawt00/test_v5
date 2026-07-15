@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -10,7 +11,12 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pattern_list_profiles import SOURCE_DB, get_profile
+from pattern_list_profiles import CHANGE_POINT_DIR, SOURCE_DB, get_profile
+
+try:
+    from pattern_list_profiles import LIST2_LIVE_PREDICTIONS_DB
+except ImportError:
+    LIST2_LIVE_PREDICTIONS_DB = CHANGE_POINT_DIR / "pattern_list2.db"
 from pattern_list2_refresh import run_refresh
 from extract_pattern_list_data import get_max_source_grid_string_id
 from pattern_list2_sim_predictions import (
@@ -18,6 +24,7 @@ from pattern_list2_sim_predictions import (
     build_simulation_predictions_df,
     count_simulation_predictions,
 )
+import pattern_list2_pred_history as _pred_history
 from pattern_list2_snapshot import (
     diff_snapshots,
     evaluate_all_runs,
@@ -50,7 +57,7 @@ FINAL_RULE_INFO: dict[str, dict[str, str]] = {
     "R2": {
         "label": "R2 · ngram 불일치",
         "short": "sim≠ngram",
-        "description": "sim ≠ ngram12 → ngram12 예측값 사용",
+        "description": "sim ≠ ngram12 → sim 예측값 사용",
     },
     "R3": {
         "label": "R3 · sim=ngram=grid10",
@@ -91,9 +98,9 @@ def rule_description(rule_id: str) -> str:
 
 def compute_final_prediction(row: pd.Series) -> str:
     """
-    최종 예측 규칙 (list2 전용):
+    최종 예측 규칙 (list2 전용, final_pred_v2):
     1. 신규 3-way 일치 Y → 3-way 예측값
-    2. ngram12 일치 N → ngram12 예측값
+    2. ngram12 일치 N → sim 예측값
     3. ngram12 일치 Y and grid10 일치 Y → ngram12 예측값
     4. 그 외 pass
     """
@@ -104,13 +111,14 @@ def compute_final_prediction(row: pd.Series) -> str:
     ngram12 = _fmt_pred_upper(row.get("ngram12_pred"))
     grid10 = _fmt_pred_upper(row.get("grid10_pred"))
     grid12 = _fmt_pred_upper(row.get("grid12_pred"))
+    sim = _fmt_pred_upper(row.get("sim_pred"))
 
     if agree_new_three is True:
         final = ngram12 or grid10 or grid12
         return final if final else "pass"
 
     if agree_sim_ngram is False:
-        return ngram12 if ngram12 else "pass"
+        return sim if sim else "pass"
 
     if agree_sim_ngram is True and agree_sim_grid10 is True:
         return ngram12 if ngram12 else "pass"
@@ -143,6 +151,7 @@ def _build_summary_table_list2(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     final_preds = df.apply(compute_final_prediction, axis=1)
+    final_rules = df.apply(classify_final_rule, axis=1)
 
     return pd.DataFrame(
         {
@@ -158,6 +167,7 @@ def _build_summary_table_list2(df: pd.DataFrame) -> pd.DataFrame:
             "ngram12 일치": df["agree_sim_ngram"].map(_yn),
             "전체 일치": df["agree_all"].map(_yn),
             "신규 3-way 일치": df["agree_new_three"].map(_yn),
+            "적용 규칙": final_rules,
             "최종 예측": final_preds,
             "미조회": df["missing_sources"].apply(lambda x: x if x else "-"),
         }
@@ -168,25 +178,39 @@ def main() -> None:
     profile = get_profile("list2")
 
     st.set_page_config(
-        page_title="예측 테이블 3-way 비교 (LIST2)",
+        page_title="예측 테이블 3-way 비교 (LIST2 · TEST)",
         page_icon="📊",
         layout="wide",
     )
-    st.title("예측 테이블 3-way 비교 (LIST2)")
+    st.title("예측 테이블 3-way 비교 (LIST2 · TEST DB)")
     st.caption(
         f"profile={profile.name} · sim={SOURCE_DB.name} · "
         f"preds={profile.predictions_db.name} · ws9 비교 · 최종 예측 규칙 적용"
     )
 
+    if getattr(profile, "is_test_db", False):
+        st.warning(
+            f"**테스트 DB 모드** — 갱신/스냅샷/복원은 `{profile.predictions_db}` 에만 기록됩니다. "
+            f"라이브 앱용 운영 DB `{LIST2_LIVE_PREDICTIONS_DB.name}` 는 건드리지 않습니다."
+        )
+
     if not profile.pattern_csv.is_file():
         st.error(f"pattern CSV 없음: {profile.pattern_csv}")
         return
 
+    if not profile.predictions_db.is_file():
+        st.error(
+            f"테스트 predictions DB 없음: `{profile.predictions_db}` · "
+            f"`db_backup/pattern_list2_TEST.db` 를 확인하세요."
+        )
+        return
+
     max_src_id = get_max_source_grid_string_id()
-    st.markdown("### 예측 테이블 갱신 (수동)")
+    st.markdown("### 예측 테이블 갱신 (수동 · TEST DB)")
     st.caption(
         f"원본 `{SOURCE_DB.name}` grid_string 최대 id={max_src_id} · "
-        f"갱신 대상 `{profile.predictions_db.name}` · 자동 실행 없음"
+        f"갱신 대상 **TEST** `{profile.predictions_db}` · "
+        f"라이브 `{LIST2_LIVE_PREDICTIONS_DB}` 와 분리 · 자동 실행 없음"
     )
 
     if st.session_state.get("refresh_confirm_full"):
@@ -228,13 +252,6 @@ def main() -> None:
                 f"grid_id {last_res.previous_grid_string_id}→{last_res.max_grid_string_id}"
             )
 
-    if not profile.predictions_db.is_file():
-        st.warning(
-            f"predictions DB 없음: `{profile.predictions_db.name}` · "
-            "「예측 테이블 갱신」 또는 「전량 갱신」을 먼저 실행하세요."
-        )
-        return
-
     cmp_df, meta = build_comparison_df("list2")
     if cmp_df.empty:
         st.warning("비교 데이터를 만들 수 없습니다.")
@@ -265,9 +282,11 @@ def main() -> None:
         st.markdown(
             """
 1. **신규 3-way 일치 = Y** → 3-way 예측값 (grid10·grid12·ngram12 동일)
-2. **ngram12 일치 = N** → ngram12 예측값
+2. **ngram12 일치 = N** → **sim** 예측값
 3. **ngram12 일치 = Y** 이고 **grid10 일치 = Y** → ngram12 예측값
 4. 위 조건 외 → **pass**
+
+규칙 버전: `final_pred_v2` (R2가 sim 사용)
             """
         )
 
@@ -312,8 +331,8 @@ def main() -> None:
         st.markdown("### simulation_predictions_change_point 미리보기")
         st.caption(
             f"`{TABLE_SIM}` · window_size=9 · ws9 prefix · "
-            f"DB `{profile.predictions_db.name}` · pass → NULL · "
-            "저장은 상단 「예측 테이블 갱신」버튼 사용"
+            f"DB **TEST** `{profile.predictions_db}` · pass → NULL · "
+            "저장은 상단 「예측 테이블 갱신」버튼 사용 · 라이브 DB 미사용"
         )
 
         pred_preview = build_simulation_predictions_df(
@@ -519,6 +538,51 @@ def main() -> None:
                         n_restored = restore_snapshot_to_current(profile, sel_run)
                     st.success(f"복원 완료 · {n_restored}행 UPSERT · run `{sel_run}`")
                     st.rerun()
+
+    st.markdown("---")
+    st.markdown("### simulation_predictions_change_point 예측값 · 규칙 이력")
+    st.caption(
+        "왼쪽이 오래된 갱신 · **prefix 옆 = 현재 최종값 적용 규칙** · "
+        "이후 칼럼은 갱신 시점 · 맨 오른쪽은 **현재 테이블** · "
+        "규칙 버전은 `prediction_build_runs.rule_version` 에 기록"
+    )
+    current_rules = {
+        str(r["ws9_core"]).strip().lower(): classify_final_rule(r)
+        for _, r in filtered.iterrows()
+        if pd.notna(r.get("ws9_core")) and str(r["ws9_core"]).strip()
+    }
+    # Streamlit이 옛 모듈을 캐시해도 최신 pred_history를 쓰도록 reload
+    pred_hist = importlib.reload(_pred_history)
+    hist_out = pred_hist.build_prediction_history_wide(
+        profile,
+        prefixes=filtered["ws9_core"].tolist() if not filtered.empty else [],
+        current_rules=current_rules,
+    )
+    if len(hist_out) == 2:
+        hist_df, hist_meta = hist_out
+        rule_hist_df = pd.DataFrame()
+    else:
+        hist_df, rule_hist_df, hist_meta = hist_out
+    if hist_df.empty:
+        st.info("표시할 예측 이력이 없습니다. 갱신 후 스냅샷이 쌓이면 칼럼이 늘어납니다.")
+    else:
+        st.markdown("#### 예측값")
+        show_hist = hist_df.copy()
+        show_hist.insert(0, "No", range(1, len(show_hist) + 1))
+        st.dataframe(show_hist, use_container_width=True, hide_index=True)
+
+        if not rule_hist_df.empty:
+            st.markdown("#### 적용 규칙 (R1–R4)")
+            show_rules = rule_hist_df.copy()
+            show_rules.insert(0, "No", range(1, len(show_rules) + 1))
+            st.dataframe(show_rules, use_container_width=True, hide_index=True)
+
+        st.caption(
+            f"표시 {len(hist_df)} prefix · 이력 칼럼 {len(hist_df.columns) - 1}개"
+        )
+        with st.expander("칼럼 ↔ run / rule_version 매핑"):
+            for line in hist_meta:
+                st.text(line)
 
 
 if __name__ == "__main__":

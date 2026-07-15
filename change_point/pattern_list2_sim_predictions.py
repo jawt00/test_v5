@@ -101,6 +101,21 @@ def _pick_metrics(
     ws10 = _norm_prefix(row.get("ws10_full"))
     ws9 = _norm_prefix(row.get("ws9_core"))
 
+    def _as_bp(v) -> str | None:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        s = str(v).strip().lower()
+        return s if s in ("b", "p") else None
+
+    fp = final_pred.lower() if final_pred and final_pred != "pass" else ""
+    sim_p = _as_bp(row.get("sim_pred"))
+    ng_p = _as_bp(row.get("ngram12_pred"))
+
+    # R2 등 final이 sim과 같고 ngram과 다르면 sim 메트릭 우선
+    prefer_sim = bool(fp and sim_p == fp and ng_p is not None and ng_p != fp)
+    if prefer_sim and ws9 and ws9 in sim_lookup:
+        return sim_lookup[ws9]
+
     for key in (ws12, ws10, ws9):
         if key and key in ngram_lookup:
             return ngram_lookup[key]
@@ -111,11 +126,14 @@ def _pick_metrics(
 
     conf = row.get("ngram12_conf") or row.get("grid10_conf") or row.get("sim_conf")
     freq = row.get("ngram12_freq") or row.get("grid10_freq") or row.get("sim_freq")
+    if prefer_sim:
+        conf = row.get("sim_conf") or conf
+        freq = row.get("sim_freq") or freq
     if conf is not None and not pd.isna(conf) and final_pred in ("B", "P"):
-        fp = final_pred.lower()
+        fp2 = final_pred.lower()
         c = float(conf)
-        b_ratio = c if fp == "b" else 100.0 - c
-        p_ratio = c if fp == "p" else 100.0 - c
+        b_ratio = c if fp2 == "b" else 100.0 - c
+        p_ratio = c if fp2 == "p" else 100.0 - c
         return {
             "confidence": c,
             "b_ratio": b_ratio,

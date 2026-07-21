@@ -8,9 +8,11 @@ from pathlib import Path
 import pandas as pd
 
 from pattern_predictions_compare_app import build_comparison_df
-from pattern_predictions_compare_app_list2 import (
+from pattern_list2_final_rules import (
     FINAL_RULE_INFO,
+    build_rule_engine,
     classify_final_rule,
+    parse_rule_version,
     rule_description,
     rule_label,
 )
@@ -170,7 +172,13 @@ def _load_prediction_meta_lookup(conn) -> dict[str, dict]:
 def load_final_rule_lookup() -> dict[str, dict]:
     """pattern_list2 취합비교 기준 ws9 prefix → 결정 규칙 lookup."""
     try:
+        from pattern_list_profiles import get_profile
+        from pattern_list2_snapshot import get_active_rule_version
+
         cmp_df, _ = build_comparison_df("list2")
+        rule_version = get_active_rule_version(get_profile("list2"))
+        enabled = parse_rule_version(rule_version)
+        _, classify_fn, _ = build_rule_engine(enabled)
     except Exception:
         return {}
 
@@ -182,7 +190,7 @@ def load_final_rule_lookup() -> dict[str, dict]:
         prefix = str(row.get("ws9_core") or "").strip().lower()
         if not prefix:
             continue
-        rule_id = classify_final_rule(row)
+        rule_id = classify_fn(row)
         out[prefix] = {
             "final_rule": rule_id,
             "final_rule_label": rule_label(rule_id),

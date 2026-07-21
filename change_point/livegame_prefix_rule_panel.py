@@ -13,50 +13,48 @@ from pathlib import Path
 
 import pandas as pd
 
+from pattern_list2_final_rules import (
+    FINAL_RULE_INFO,
+    build_rule_engine,
+    parse_rule_version,
+)
+
 ENABLED = True
 
 DB_PATH = Path(__file__).resolve().parent / "pattern_list2.db"
 LIVE_STEP_TABLE = "live_step_results"
 WS9_WINDOW = 9
-
-FINAL_RULE_INFO = {
-    "R1": {
-        "label": "R1 · 3-way 일치",
-        "description": "grid10 = grid12 = ngram12 일치 → 해당 예측값 사용",
-    },
-    "R2": {
-        "label": "R2 · ngram 불일치",
-        "description": "sim ≠ ngram12 → sim 예측값 사용",
-    },
-    "R3": {
-        "label": "R3 · sim=ngram=grid10",
-        "description": "sim = ngram12 = grid10 → ngram12 예측값 사용",
-    },
-    "R4": {
-        "label": "R4 · pass",
-        "description": "위 조건 해당 없음 → 예측 없음 (pass)",
-    },
-    "unknown": {
-        "label": "미분류",
-        "description": "pattern_list2에 없는 prefix",
-    },
-}
-
-
-def classify_final_rule(row: pd.Series) -> str:
-    if row.get("agree_new_three") is True:
-        return "R1"
-    if row.get("agree_sim_ngram") is False:
-        return "R2"
-    if row.get("agree_sim_ngram") is True and row.get("agree_sim_grid10") is True:
-        return "R3"
-    return "R4"
+PIPELINE_STATE_TABLE = "pipeline_state"
+STATE_KEY_ACTIVE_RULE_VERSION = "active_rule_version"
+TABLE_RUNS = "prediction_build_runs"
 
 
 def _norm_prefix(value) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return ""
     return str(value).strip().lower()
+
+
+def _load_active_rule_version(db_path: Path | None = None) -> str | None:
+    path = Path(db_path) if db_path is not None else DB_PATH
+    if not path.is_file():
+        return None
+    conn = sqlite3.connect(path)
+    try:
+        row = conn.execute(
+            f"SELECT value FROM {PIPELINE_STATE_TABLE} WHERE key = ? LIMIT 1",
+            (STATE_KEY_ACTIVE_RULE_VERSION,),
+        ).fetchone()
+        if row and row[0]:
+            return str(row[0])
+        row = conn.execute(
+            f"SELECT rule_version FROM {TABLE_RUNS} WHERE is_active = 1 LIMIT 1"
+        ).fetchone()
+        return str(row[0]) if row and row[0] else None
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
 
 
 @lru_cache(maxsize=1)
@@ -71,17 +69,21 @@ def _load_rule_lookup() -> dict[str, dict]:
     if cmp_df is None or cmp_df.empty:
         return {}
 
+    enabled = parse_rule_version(_load_active_rule_version())
+    _, classify_fn, rule_version = build_rule_engine(enabled)
+
     out: dict[str, dict] = {}
     for _, row in cmp_df.iterrows():
         prefix = _norm_prefix(row.get("ws9_core"))
         if not prefix:
             continue
-        rule_id = classify_final_rule(row)
+        rule_id = classify_fn(row)
         info = FINAL_RULE_INFO.get(rule_id, FINAL_RULE_INFO["unknown"])
         out[prefix] = {
             "final_rule": rule_id,
             "final_rule_label": info["label"],
             "final_rule_desc": info["description"],
+            "rule_version": rule_version,
         }
     return out
 
@@ -232,10 +234,12 @@ def render_prefix_rule_panel(
         return
 
     stats_db = Path(db_path) if db_path is not None else DB_PATH
+    active_rv = _load_active_rule_version(stats_db)
     st_module.markdown("#### 예측 prefix 규칙 · 라이브 적중률 (W9)")
     st_module.caption(
-        "윈도우 9 · list2 취합비교 결정 규칙(R1~R3) · ws9 prefix · "
+        "윈도우 9 · list2 취합비교 결정 규칙(R1~R5) · ws9 prefix · "
         f"적중률=`{LIVE_STEP_TABLE}` @ `{stats_db.name}` window_size=9 누적"
+        + (f" · active `{active_rv}`" if active_rv else "")
     )
 
     cols = [

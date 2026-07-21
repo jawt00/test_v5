@@ -128,21 +128,32 @@ def run_refresh(
     *,
     full: bool = False,
     sim_only: bool = False,
+    enabled_rules=None,
     final_pred_fn=None,
+    classify_final_rule_fn=None,
+    rule_version: str | None = None,
 ) -> RefreshResult:
     """
     수동 갱신 실행.
     - incremental (default): 원본 id 증가분만 staging sync 후 mid+sim UPSERT
     - full: staging 전량 재적재
     - sim_only: mid sync 생략, sim UPSERT만
+    - enabled_rules: 적용할 규칙 ID 집합 (R1,R2,R3,R5). 미매칭 prefix → pass
     """
-    from pattern_predictions_compare_app_list2 import (
-        classify_final_rule,
-        compute_final_prediction,
-    )
+    from pattern_list2_final_rules import build_rule_engine
 
-    if final_pred_fn is None:
-        final_pred_fn = compute_final_prediction
+    if final_pred_fn is None or classify_final_rule_fn is None:
+        compute_fn, classify_fn, ver = build_rule_engine(enabled_rules)
+        if final_pred_fn is None:
+            final_pred_fn = compute_fn
+        if classify_final_rule_fn is None:
+            classify_final_rule_fn = classify_fn
+        if rule_version is None:
+            rule_version = ver
+    elif rule_version is None:
+        from pattern_list2_final_rules import DEFAULT_RULE_VERSION
+
+        rule_version = DEFAULT_RULE_VERSION
 
     max_id = get_max_source_grid_string_id()
     profile.predictions_db.parent.mkdir(parents=True, exist_ok=True)
@@ -204,7 +215,8 @@ def run_refresh(
             profile,
             result,
             final_pred_fn,
-            classify_final_rule,
+            classify_final_rule_fn,
+            rule_version=rule_version,
             set_active=True,
         )
         if run_id:
@@ -223,6 +235,11 @@ def main() -> None:
     parser.add_argument("--profile", default="list2", choices=["list1", "list2"])
     parser.add_argument("--full", action="store_true", help="staging 전량 재적재")
     parser.add_argument("--sim-only", action="store_true", help="sim 테이블만 UPSERT")
+    parser.add_argument(
+        "--rules",
+        default=None,
+        help="적용 규칙 (쉼표 구분, 예: R1,R2,R3,R5). 미지정 시 기본 R1+R2+R3+R5",
+    )
     args = parser.parse_args()
 
     profile = get_profile(args.profile)
@@ -231,7 +248,16 @@ def main() -> None:
     if getattr(profile, "is_test_db", False):
         print("NOTE: TEST DB mode — live pattern_list2.db is not modified")
 
-    result = run_refresh(profile, full=args.full, sim_only=args.sim_only)
+    enabled_rules = None
+    if args.rules:
+        enabled_rules = [r.strip() for r in args.rules.split(",") if r.strip()]
+
+    result = run_refresh(
+        profile,
+        full=args.full,
+        sim_only=args.sim_only,
+        enabled_rules=enabled_rules,
+    )
 
     print(f"status: {result.status}")
     print(f"mode: {result.mode}")

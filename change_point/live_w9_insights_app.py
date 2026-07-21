@@ -24,7 +24,7 @@ from live_w9_insights import (
     summarize_volume_buckets,
     summarize_volume_focus,
 )
-from pattern_predictions_compare_app_list2 import FINAL_RULE_INFO
+from pattern_list2_final_rules import FINAL_RULE_INFO
 from prefix_pattern_svg import prefix_pattern_svg_viz
 
 st.set_page_config(
@@ -101,11 +101,12 @@ def _render_rule_reference() -> None:
             "라이브 예측값은 `pattern_list2.db` · `simulation_predictions_change_point`에 "
             "저장되며, 아래 우선순위로 결정됩니다."
         )
-        for rule_id in ("R1", "R2", "R3", "R4"):
+        for rule_id in ("R1", "R2", "R3", "R5"):
             info = FINAL_RULE_INFO[rule_id]
             st.markdown(f"**{info['label']}** — {info['description']}")
+        st.markdown(f"**{FINAL_RULE_INFO['R4']['label']}** — {FINAL_RULE_INFO['R4']['description']}")
         st.caption(
-            "유효 라이브 예측(B/P)은 R1~R3로 결정된 prefix만 포함됩니다. "
+            "유효 라이브 예측(B/P)은 선택된 규칙(R1~R5)으로 결정된 prefix만 포함됩니다. "
             "R4(pass)는 라이브에서 skipped 처리됩니다."
         )
 

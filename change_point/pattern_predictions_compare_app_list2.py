@@ -17,6 +17,14 @@ try:
     from pattern_list_profiles import LIST2_LIVE_PREDICTIONS_DB
 except ImportError:
     LIST2_LIVE_PREDICTIONS_DB = CHANGE_POINT_DIR / "pattern_list2.db"
+from pattern_list2_final_rules import (
+    FINAL_RULE_INFO,
+    RULE_ORDER,
+    build_rule_engine,
+    classify_final_rule,
+    compute_final_prediction,
+    normalize_enabled_rules,
+)
 from pattern_list2_refresh import run_refresh
 from extract_pattern_list_data import get_max_source_grid_string_id
 from pattern_list2_sim_predictions import (
@@ -29,6 +37,7 @@ from pattern_list2_snapshot import (
     diff_snapshots,
     evaluate_all_runs,
     get_active_run_id,
+    get_active_rule_version,
     list_runs,
     load_latest_scores,
     load_snapshot,
@@ -41,92 +50,19 @@ from pattern_predictions_compare_app import (
 )
 
 
-def _fmt_pred_upper(value) -> str | None:
-    if value is None or (isinstance(value, float) and pd.isna(value)) or value == "":
-        return None
-    s = str(value).strip().upper()
-    return s[0] if s else None
+def _enabled_rules_from_session() -> frozenset[str]:
+    selected = st.session_state.get("refresh_enabled_rules")
+    if selected is None:
+        return normalize_enabled_rules(RULE_ORDER)
+    return normalize_enabled_rules(selected)
 
 
-FINAL_RULE_INFO: dict[str, dict[str, str]] = {
-    "R1": {
-        "label": "R1 · 3-way 일치",
-        "short": "3-way",
-        "description": "grid10 = grid12 = ngram12 일치 → 해당 예측값 사용",
-    },
-    "R2": {
-        "label": "R2 · ngram 불일치",
-        "short": "sim≠ngram",
-        "description": "sim ≠ ngram12 → sim 예측값 사용",
-    },
-    "R3": {
-        "label": "R3 · sim=ngram=grid10",
-        "short": "sim=ngram=grid10",
-        "description": "sim = ngram12 = grid10 → ngram12 예측값 사용",
-    },
-    "R4": {
-        "label": "R4 · pass",
-        "short": "pass",
-        "description": "위 조건 해당 없음 → 예측 없음 (pass)",
-    },
-    "unknown": {
-        "label": "미분류",
-        "short": "-",
-        "description": "pattern_list2에 없는 prefix (규칙 역산 불가)",
-    },
-}
-
-
-def classify_final_rule(row: pd.Series) -> str:
-    """compute_final_prediction과 동일 우선순위로 적용 규칙 ID 반환."""
-    if row.get("agree_new_three") is True:
-        return "R1"
-    if row.get("agree_sim_ngram") is False:
-        return "R2"
-    if row.get("agree_sim_ngram") is True and row.get("agree_sim_grid10") is True:
-        return "R3"
-    return "R4"
-
-
-def rule_label(rule_id: str) -> str:
-    return FINAL_RULE_INFO.get(rule_id, FINAL_RULE_INFO["unknown"])["label"]
-
-
-def rule_description(rule_id: str) -> str:
-    return FINAL_RULE_INFO.get(rule_id, FINAL_RULE_INFO["unknown"])["description"]
-
-
-def compute_final_prediction(row: pd.Series) -> str:
-    """
-    최종 예측 규칙 (list2 전용, final_pred_v2):
-    1. 신규 3-way 일치 Y → 3-way 예측값
-    2. ngram12 일치 N → sim 예측값
-    3. ngram12 일치 Y and grid10 일치 Y → ngram12 예측값
-    4. 그 외 pass
-    """
-    agree_new_three = row.get("agree_new_three")
-    agree_sim_ngram = row.get("agree_sim_ngram")
-    agree_sim_grid10 = row.get("agree_sim_grid10")
-
-    ngram12 = _fmt_pred_upper(row.get("ngram12_pred"))
-    grid10 = _fmt_pred_upper(row.get("grid10_pred"))
-    grid12 = _fmt_pred_upper(row.get("grid12_pred"))
-    sim = _fmt_pred_upper(row.get("sim_pred"))
-
-    if agree_new_three is True:
-        final = ngram12 or grid10 or grid12
-        return final if final else "pass"
-
-    if agree_sim_ngram is False:
-        return sim if sim else "pass"
-
-    if agree_sim_ngram is True and agree_sim_grid10 is True:
-        return ngram12 if ngram12 else "pass"
-
-    return "pass"
-
-
-def _build_summary_table_list2(df: pd.DataFrame) -> pd.DataFrame:
+def _build_summary_table_list2(
+    df: pd.DataFrame,
+    *,
+    compute_fn=compute_final_prediction,
+    classify_fn=classify_final_rule,
+) -> pd.DataFrame:
     def _pred(v):
         return v if pd.notna(v) and v else "-"
 
@@ -150,8 +86,8 @@ def _build_summary_table_list2(df: pd.DataFrame) -> pd.DataFrame:
         axis=1,
     )
 
-    final_preds = df.apply(compute_final_prediction, axis=1)
-    final_rules = df.apply(classify_final_rule, axis=1)
+    final_preds = df.apply(compute_fn, axis=1)
+    final_rules = df.apply(classify_fn, axis=1)
 
     return pd.DataFrame(
         {
@@ -213,13 +149,45 @@ def main() -> None:
         f"라이브 `{LIST2_LIVE_PREDICTIONS_DB}` 와 분리 · 자동 실행 없음"
     )
 
+    if "refresh_enabled_rules" not in st.session_state:
+        st.session_state.refresh_enabled_rules = list(RULE_ORDER)
+
+    active_rv = get_active_rule_version(profile)
+    st.markdown("#### 적용 규칙 선택")
+    rule_cols = st.columns(len(RULE_ORDER))
+    selected_rules: list[str] = []
+    for col, rule_id in zip(rule_cols, RULE_ORDER):
+        info = FINAL_RULE_INFO[rule_id]
+        with col:
+            if st.checkbox(
+                info["label"],
+                value=rule_id in st.session_state.refresh_enabled_rules,
+                key=f"rule_sel_{rule_id}",
+                help=info["description"],
+            ):
+                selected_rules.append(rule_id)
+    st.session_state.refresh_enabled_rules = selected_rules
+    preview_compute, preview_classify, preview_rule_version = build_rule_engine(selected_rules)
+    st.caption(
+        f"미리보기 규칙 버전: `{preview_rule_version}` · "
+        f"선택 {len(selected_rules)}/{len(RULE_ORDER)} · "
+        f"미매칭 prefix → pass"
+    )
+    if active_rv:
+        st.caption(f"DB active 규칙 버전: `{active_rv}`")
+    if not selected_rules:
+        st.error("최소 1개 규칙을 선택하세요. (선택 없으면 갱신 불가)")
+
+    def _do_refresh(**kwargs):
+        return run_refresh(profile, enabled_rules=selected_rules, **kwargs)
+
     if st.session_state.get("refresh_confirm_full"):
         st.warning("전량 갱신(--full)을 실행합니다. staging을 비우고 전체 재적재합니다.")
         bc1, bc2 = st.columns(2)
         with bc1:
-            if st.button("전량 갱신 확인", type="primary"):
+            if st.button("전량 갱신 확인", type="primary", disabled=not selected_rules):
                 with st.spinner("전량 갱신 중..."):
-                    res = run_refresh(profile, full=True)
+                    res = _do_refresh(full=True)
                 st.session_state.refresh_confirm_full = False
                 st.session_state.last_refresh_result = res
                 st.rerun()
@@ -230,13 +198,22 @@ def main() -> None:
 
     rc1, rc2, rc3 = st.columns([1, 1, 2])
     with rc1:
-        if st.button("예측 테이블 갱신", type="primary", use_container_width=True):
+        if st.button(
+            "예측 테이블 갱신",
+            type="primary",
+            use_container_width=True,
+            disabled=not selected_rules,
+        ):
             with st.spinner("증분 갱신 중..."):
-                res = run_refresh(profile, full=False)
+                res = _do_refresh(full=False)
             st.session_state.last_refresh_result = res
             st.rerun()
     with rc2:
-        if st.button("전량 갱신 (--full)", use_container_width=True):
+        if st.button(
+            "전량 갱신 (--full)",
+            use_container_width=True,
+            disabled=not selected_rules,
+        ):
             st.session_state.refresh_confirm_full = True
             st.rerun()
 
@@ -262,7 +239,7 @@ def main() -> None:
 
     hits = meta["hits"]
     tc = meta["table_counts"]
-    final_series = cmp_df.apply(compute_final_prediction, axis=1)
+    final_series = cmp_df.apply(preview_compute, axis=1)
     n_final = int((final_series != "pass").sum())
 
     c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
@@ -279,14 +256,16 @@ def main() -> None:
         st.json(tc)
 
     with st.expander("최종 예측 규칙"):
+        for rule_id in RULE_ORDER:
+            info = FINAL_RULE_INFO[rule_id]
+            on = rule_id in selected_rules
+            mark = "✓" if on else "○"
+            st.markdown(f"{mark} **{info['label']}** — {info['description']}")
         st.markdown(
-            """
-1. **신규 3-way 일치 = Y** → 3-way 예측값 (grid10·grid12·ngram12 동일)
-2. **ngram12 일치 = N** → **sim** 예측값
-3. **ngram12 일치 = Y** 이고 **grid10 일치 = Y** → ngram12 예측값
-4. 위 조건 외 → **pass**
+            f"""
+**R4 · pass** — 선택된 규칙에 해당 없음 → 예측 없음 (pass)
 
-규칙 버전: `final_pred_v2` (R2가 sim 사용)
+미리보기 규칙 버전: `{preview_rule_version}`
             """
         )
 
@@ -301,7 +280,7 @@ def main() -> None:
         search = st.text_input("prefix 검색 (ws9 / ws10 / ws12)", "")
 
     filtered = cmp_df.copy()
-    filtered["최종 예측"] = filtered.apply(compute_final_prediction, axis=1)
+    filtered["최종 예측"] = filtered.apply(preview_compute, axis=1)
     if ext_filter != "전체":
         filtered = filtered[filtered["prefix_ext"] == ext_filter]
     if mismatch_only:
@@ -322,7 +301,11 @@ def main() -> None:
 
     with tab1:
         st.markdown("### 취합 비교 — simulation ws9 prefix 기준")
-        show = _build_summary_table_list2(filtered.drop(columns=["최종 예측"], errors="ignore"))
+        show = _build_summary_table_list2(
+            filtered.drop(columns=["최종 예측"], errors="ignore"),
+            compute_fn=preview_compute,
+            classify_fn=preview_classify,
+        )
         show.insert(0, "No", range(1, len(show) + 1))
         st.dataframe(show, use_container_width=True, hide_index=True)
         st.caption(f"표시 {len(show)} / {len(cmp_df)}행")
@@ -336,7 +319,7 @@ def main() -> None:
         )
 
         pred_preview = build_simulation_predictions_df(
-            cmp_df, profile, compute_final_prediction
+            cmp_df, profile, preview_compute
         )
         existing_n = count_simulation_predictions(profile)
         n_pass = int(pred_preview["predicted_value"].isna().sum()) if not pred_preview.empty else 0
@@ -367,9 +350,9 @@ def main() -> None:
                 hide_index=True,
             )
 
-        if st.button("sim만 재적용 (--sim-only)", type="secondary"):
+        if st.button("sim만 재적용 (--sim-only)", type="secondary", disabled=not selected_rules):
             with st.spinner("sim UPSERT 중..."):
-                res = run_refresh(profile, sim_only=True)
+                res = _do_refresh(sim_only=True)
             st.session_state.last_refresh_result = res
             st.rerun()
 
@@ -547,7 +530,7 @@ def main() -> None:
         "규칙 버전은 `prediction_build_runs.rule_version` 에 기록"
     )
     current_rules = {
-        str(r["ws9_core"]).strip().lower(): classify_final_rule(r)
+        str(r["ws9_core"]).strip().lower(): preview_classify(r)
         for _, r in filtered.iterrows()
         if pd.notna(r.get("ws9_core")) and str(r["ws9_core"]).strip()
     }
@@ -572,7 +555,7 @@ def main() -> None:
         st.dataframe(show_hist, use_container_width=True, hide_index=True)
 
         if not rule_hist_df.empty:
-            st.markdown("#### 적용 규칙 (R1–R4)")
+            st.markdown("#### 적용 규칙 (R1–R5, pass=R4)")
             show_rules = rule_hist_df.copy()
             show_rules.insert(0, "No", range(1, len(show_rules) + 1))
             st.dataframe(show_rules, use_container_width=True, hide_index=True)

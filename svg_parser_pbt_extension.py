@@ -26,10 +26,10 @@ from svg_parser_module import (
 # Save Page / SingleFile 저장 시 Bead Road가 iframe srcdoc 안에 있는 경우
 _IFRAME_SRC_ATTRS = ("srcdoc", "data-savepage-srcdoc")
 
-# [유지보수] P/B/T Bead Road 그리드 클래스명 (샘플 HTML 2026-07-15 기준)
-PBT_BEAD_ROAD_MAIN_CONTAINER_CLASS = "uv_uA"
-PBT_BEAD_ROAD_ROW_CLASS = "uv_uF"
-PBT_BEAD_ROAD_CELL_CLASS = "uv_uG"
+# [유지보수] P/B/T Bead Road 그리드 클래스명 (샘플 HTML 2026-07-20 기준)
+PBT_BEAD_ROAD_MAIN_CONTAINER_CLASS = "uS_uX"
+PBT_BEAD_ROAD_ROW_CLASS = "uS_uq"
+PBT_BEAD_ROAD_CELL_CLASS = "uS_uZ"
 
 
 def _empty_grid():

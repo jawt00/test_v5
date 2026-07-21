@@ -46,8 +46,9 @@ TABLE_RUNS = "prediction_build_runs"
 TABLE_SNAPSHOTS = "simulation_predictions_change_point_snapshots"
 TABLE_SCORES = "prediction_run_live_scores"
 
-RULE_VERSION = "final_pred_v2"
+RULE_VERSION = "final_pred_v3"
 STATE_KEY_ACTIVE_SNAPSHOT = "active_snapshot_run_id"
+STATE_KEY_ACTIVE_RULE_VERSION = "active_rule_version"
 STATE_KEY_RESTORED_AT = "restored_at"
 
 RUNS_DDL = f"""
@@ -203,10 +204,12 @@ def save_build_run_snapshot(
     pred_df: pd.DataFrame,
     snapshot_df: pd.DataFrame,
     *,
+    rule_version: str | None = None,
     set_active: bool = False,
 ) -> str:
     """갱신 성공 후 run 메타 + 풀스냅샷 INSERT. run_id 반환."""
     run_id = _new_run_id()
+    rv = rule_version or RULE_VERSION
     conn = get_db_connection(profile)
     try:
         ensure_snapshot_schema(conn)
@@ -225,7 +228,7 @@ def save_build_run_snapshot(
                 refresh_result.mode,
                 refresh_result.max_grid_string_id,
                 refresh_result.previous_grid_string_id,
-                RULE_VERSION,
+                rv,
                 refresh_result.grid_rows_synced,
                 refresh_result.ngram_rows_synced,
                 refresh_result.upserted_sim,
@@ -284,6 +287,13 @@ def save_build_run_snapshot(
                 INSERT OR REPLACE INTO {PIPELINE_STATE_TABLE} (key, value, updated_at)
                 VALUES (?, ?, ?)
                 """,
+                (STATE_KEY_ACTIVE_RULE_VERSION, rv, now),
+            )
+            conn.execute(
+                f"""
+                INSERT OR REPLACE INTO {PIPELINE_STATE_TABLE} (key, value, updated_at)
+                VALUES (?, ?, ?)
+                """,
                 (STATE_KEY_RESTORED_AT, now, now),
             )
 
@@ -302,6 +312,7 @@ def capture_snapshot_after_refresh(
     final_pred_fn: Callable[[pd.Series], str],
     classify_final_rule_fn: Callable[[pd.Series], str],
     *,
+    rule_version: str | None = None,
     set_active: bool = True,
 ) -> str | None:
     """refresh ok 후 cmp/pred 재빌드 → 스냅샷 저장."""
@@ -316,6 +327,7 @@ def capture_snapshot_after_refresh(
         cmp_df,
         pred_df,
         snapshot_df,
+        rule_version=rule_version,
         set_active=set_active,
     )
 
@@ -598,6 +610,30 @@ def get_active_run_id(profile: PatternListProfile) -> str | None:
             return val
         row = conn.execute(
             f"SELECT run_id FROM {TABLE_RUNS} WHERE is_active = 1 LIMIT 1"
+        ).fetchone()
+        return row[0] if row else None
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+
+
+def get_active_rule_version(profile: PatternListProfile) -> str | None:
+    if not profile.predictions_db.is_file():
+        return None
+    conn = get_db_connection(profile)
+    try:
+        ensure_snapshot_schema(conn)
+        ensure_pipeline_state_schema(conn)
+        val = get_pipeline_state(conn, STATE_KEY_ACTIVE_RULE_VERSION, "")
+        if val:
+            return val
+        run_id = get_active_run_id(profile)
+        if not run_id:
+            return None
+        row = conn.execute(
+            f"SELECT rule_version FROM {TABLE_RUNS} WHERE run_id = ? LIMIT 1",
+            (run_id,),
         ).fetchone()
         return row[0] if row else None
     except sqlite3.OperationalError:

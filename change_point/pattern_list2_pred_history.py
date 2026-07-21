@@ -45,7 +45,7 @@ def _rule_display(rule_id: str | None) -> str:
     if rid == "-":
         return "-"
     try:
-        from pattern_predictions_compare_app_list2 import FINAL_RULE_INFO
+        from pattern_list2_final_rules import FINAL_RULE_INFO
 
         info = FINAL_RULE_INFO.get(rid)
         if info and info.get("label"):

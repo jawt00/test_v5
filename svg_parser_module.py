@@ -15,10 +15,10 @@ TABLE_WIDTH = 15
 TABLE_HEIGHT = 6
 
 # [유지보수] Bead Road 그리드 HTML 클래스명 (변경 시 parse_bead_road_svg 및 docstring 동기화)
-# 2026-07-15: xO_xT/xO_xb/xO_xV → uv_uA/uv_uF/uv_uG
-BEAD_ROAD_MAIN_CONTAINER_CLASS = 'uv_uA'
-BEAD_ROAD_ROW_CLASS = 'uv_uF'
-BEAD_ROAD_CELL_CLASS = 'uv_uG'
+# 2026-07-20: uv_uA/uv_uF/uv_uG → uS_uX/uS_uq/uS_uZ
+BEAD_ROAD_MAIN_CONTAINER_CLASS = 'uS_uX'
+BEAD_ROAD_ROW_CLASS = 'uS_uq'
+BEAD_ROAD_CELL_CLASS = 'uS_uZ'
 
 # DB 경로 (hypothesis_validation_app.py와 동일한 DB 사용)
 DB_PATH = 'hypothesis_validation.db'
@@ -58,7 +58,8 @@ def parse_bead_road_svg(svg_code):
     - 2025-02-XX: rf_ri → rw_rz, rf_qW → rw_qM, rf_rk → rw_rB
     - 2025-02-XX: rw_rz → pf_pi, rw_qM → pf_ow, rw_rB → pf_pk
     - 2025-02-XX: pf_pi → q1_rc, pf_ow → q1_oN, pf_pk → q1_rf
-    - 2025-02-XX: q1_rc → rN_rQ, q1_oN → rN_oT, q1_rf → rN_rS (최신 구조)
+    - 2025-02-XX: q1_rc → rN_rQ, q1_oN → rN_oT, q1_rf → rN_rS
+    - 2026-07-XX: uv_uA → uS_uX, uv_uF → uS_uq, uv_uG → uS_uZ (최신 구조)
     - 이전: rg_rj → qz_qC (메인 컨테이너)
     - 이전: rg_qu → qz_pO (행)
     - 이전: rg_rl → qz_qF (셀)

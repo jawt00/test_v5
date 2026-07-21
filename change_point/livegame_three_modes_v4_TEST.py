@@ -137,7 +137,7 @@ def save_live_step_results(history: list, saved_keys: set):
         conn.close()
 
 st.set_page_config(
-    page_title="Change-point 플로우 라이브 게임 v4 (3가지 검증 방식)",
+    page_title="TEST · Change-point 플로우 라이브 게임 v4 (3가지 검증 방식)",
     page_icon="🎮",
     layout="wide",
 )

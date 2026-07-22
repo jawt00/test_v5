@@ -232,8 +232,7 @@ git add .
 
 git commit -m "$(date +%Y%m%d_%H%M)"
 
-git push -u origin change_point-v4
-
+git push -u origin change_point-v6
 
 
 git reset --hard origin/change_point-v2

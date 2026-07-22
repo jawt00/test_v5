@@ -25,7 +25,9 @@ from svg_parser_module import (
 # [OPTIONAL P/B/T] 제거 시 아래 import 및 _parse_bead_road_html 내 호출 삭제
 from svg_parser_pbt_extension import parse_bead_road_svg_with_pbt_fallback
 # 파싱에 사용하는 메인 컨테이너 클래스명 (모듈 상수와 동기화, 없으면 기본값)
-BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'uS_uX')
+BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'wn_ws')
+BEAD_ROAD_ROW_CLASS = getattr(_svg_parser, 'BEAD_ROAD_ROW_CLASS', 'wn_vL')
+BEAD_ROAD_CELL_CLASS = getattr(_svg_parser, 'BEAD_ROAD_CELL_CLASS', 'wn_wu')
 
 MAX_BATCH_FILES = 20
 
@@ -53,8 +55,7 @@ def _parse_bead_road_html(html: str):
     전체 HTML 또는 iframe srcdoc 내부에서 Bead Road grid 파싱.
     한글 파서 실패 시 P/B/T 파서로 fallback (iframe srcdoc 포함).
     """
-    parsed_grid, _ = parse_bead_road_svg_with_pbt_fallback(html)
-    return parsed_grid
+    return parse_bead_road_svg_with_pbt_fallback(html)
 
 
 def _validate_uploads(files):
@@ -69,7 +70,7 @@ def _validate_uploads(files):
 def _parse_html_content(html: str) -> dict:
     """HTML 문자열을 파싱하여 grid/grid_string 또는 error 반환"""
     try:
-        parsed_grid = _parse_bead_road_html(html)
+        parsed_grid, parse_meta = _parse_bead_road_html(html)
         grid_string = grid_to_string_column_wise(parsed_grid)
         if grid_string:
             return {
@@ -77,6 +78,7 @@ def _parse_html_content(html: str) -> dict:
                 "grid_string": grid_string,
                 "grid": parsed_grid,
                 "error": None,
+                "parse_meta": parse_meta,
             }
         return {
             "status": "error",
@@ -84,9 +86,11 @@ def _parse_html_content(html: str) -> dict:
             "grid": parsed_grid,
             "error": (
                 f"HTML에서 Bead Road 그리드를 찾지 못했거나 유효한 데이터가 없습니다. "
-                f"(컨테이너 클래스: .{BEAD_ROAD_MAIN_CONTAINER_CLASS}, "
+                f"(컨테이너: .{BEAD_ROAD_MAIN_CONTAINER_CLASS}, "
+                f"행: .{BEAD_ROAD_ROW_CLASS}, 셀: .{BEAD_ROAD_CELL_CLASS}, "
                 f"iframe srcdoc 포함 탐색 완료)"
             ),
+            "parse_meta": parse_meta,
         }
     except Exception as e:
         return {

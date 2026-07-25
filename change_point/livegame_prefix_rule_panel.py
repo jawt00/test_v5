@@ -57,19 +57,29 @@ def _load_active_rule_version(db_path: Path | None = None) -> str | None:
         conn.close()
 
 
-@lru_cache(maxsize=1)
-def _load_rule_lookup() -> dict[str, dict]:
+@lru_cache(maxsize=4)
+def _load_rule_lookup(profile: str = "list2") -> dict[str, dict]:
     try:
-        from pattern_predictions_compare_app import build_comparison_df
+        if profile == "list3":
+            from pattern_list3_compare import build_comparison_df, cmp_row_for_rules
+            from pattern_list3_final_rules import FINAL_RULE_INFO as RULE_INFO
+            from pattern_list3_final_rules import build_rule_engine, parse_rule_version
 
-        cmp_df, _ = build_comparison_df("list2")
+            cmp_df, _ = build_comparison_df("list3")
+        else:
+            from pattern_list2_final_rules import FINAL_RULE_INFO as RULE_INFO
+            from pattern_list2_final_rules import build_rule_engine, parse_rule_version
+            from pattern_predictions_compare_app import build_comparison_df
+
+            cmp_df, _ = build_comparison_df("list2")
     except Exception:
         return {}
 
     if cmp_df is None or cmp_df.empty:
         return {}
 
-    enabled = parse_rule_version(_load_active_rule_version())
+    db_path = _db_path_for_panel(profile)
+    enabled = parse_rule_version(_load_active_rule_version(db_path))
     _, classify_fn, rule_version = build_rule_engine(enabled)
 
     out: dict[str, dict] = {}
@@ -77,8 +87,11 @@ def _load_rule_lookup() -> dict[str, dict]:
         prefix = _norm_prefix(row.get("ws9_core"))
         if not prefix:
             continue
-        rule_id = classify_fn(row)
-        info = FINAL_RULE_INFO.get(rule_id, FINAL_RULE_INFO["unknown"])
+        if profile == "list3":
+            rule_id = classify_fn(cmp_row_for_rules(row))
+        else:
+            rule_id = classify_fn(row)
+        info = RULE_INFO.get(rule_id, RULE_INFO["unknown"])
         out[prefix] = {
             "final_rule": rule_id,
             "final_rule_label": info["label"],
@@ -88,12 +101,48 @@ def _load_rule_lookup() -> dict[str, dict]:
     return out
 
 
+def _db_path_for_panel(profile: str) -> Path:
+    from pattern_list_profiles import LIST2_TEST_PREDICTIONS_DB, LIST3_TEST_PREDICTIONS_DB
+
+    if profile == "list3":
+        return LIST3_TEST_PREDICTIONS_DB
+    return LIST2_TEST_PREDICTIONS_DB
+
+
+def _ws9_from_prediction(prefix, window_size, profile: str = "list2") -> str:
+    if not prefix or not window_size:
+        return ""
+    p = _norm_prefix(prefix)
+    ws = int(window_size)
+    if profile == "list3":
+        try:
+            from pattern_list3_ws9_core import to_ws9_core
+
+            return to_ws9_core(p, ws)
+        except Exception:
+            return p if ws == WS9_WINDOW else ""
+    if ws == WS9_WINDOW:
+        return p
+    try:
+        from pattern_predictions_compare_app import to_ws9_prefix
+
+        return to_ws9_prefix(p, ws)
+    except Exception:
+        return ""
+
+
 def _load_live_prefix_stats(db_path: Path | None = None) -> dict[str, dict]:
     path = Path(db_path) if db_path is not None else DB_PATH
     if not path.is_file():
         return {}
     conn = sqlite3.connect(path, timeout=20.0)
     try:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (LIVE_STEP_TABLE,),
+        ).fetchone()
+        if not row:
+            return {}
         df = pd.read_sql_query(
             f"""
             SELECT prefix,
@@ -109,7 +158,7 @@ def _load_live_prefix_stats(db_path: Path | None = None) -> dict[str, dict]:
             conn,
             params=[WS9_WINDOW],
         )
-    except sqlite3.OperationalError:
+    except (sqlite3.OperationalError, pd.errors.DatabaseError):
         return {}
     finally:
         conn.close()
@@ -129,33 +178,21 @@ def _load_live_prefix_stats(db_path: Path | None = None) -> dict[str, dict]:
     return out
 
 
-def _ws9_from_prediction(prefix, window_size) -> str:
-    if not prefix or not window_size:
-        return ""
-    p = _norm_prefix(prefix)
-    ws = int(window_size)
-    if ws == WS9_WINDOW:
-        return p
-    try:
-        from pattern_predictions_compare_app import to_ws9_prefix
-
-        return to_ws9_prefix(p, ws)
-    except Exception:
-        return ""
-
-
 def build_prefix_rule_panel_rows(
     flow_result: dict,
     predict_fn,
     display_order: tuple[str, ...],
     mode_label_fn,
     db_path: Path | None = None,
+    *,
+    profile: str = "list2",
 ) -> list[dict]:
     """현재 포지션 예측 prefix별 규칙·라이브 적중률 행 생성."""
     gs = flow_result.get("grid_string") or ""
     results = flow_result.get("results") or {}
-    rule_map = _load_rule_lookup()
-    stats_map = _load_live_prefix_stats(db_path)
+    rule_map = _load_rule_lookup(profile)
+    stats_path = Path(db_path) if db_path is not None else _db_path_for_panel(profile)
+    stats_map = _load_live_prefix_stats(stats_path)
     unknown = FINAL_RULE_INFO["unknown"]
     rows: list[dict] = []
 
@@ -181,7 +218,7 @@ def build_prefix_rule_panel_rows(
             })
             continue
 
-        ws9 = _ws9_from_prediction(prefix, window_size)
+        ws9 = _ws9_from_prediction(prefix, window_size, profile=profile)
         rule = rule_map.get(ws9) or {}
         stats = stats_map.get(ws9) or {}
         rule_id = rule.get("final_rule", "unknown")
@@ -263,3 +300,52 @@ def render_prefix_rule_panel(
         "final_rule_desc": "규칙 설명",
     })
     st_module.dataframe(show, use_container_width=True, hide_index=True)
+
+
+def render_unified_prefix_rule_panel(
+    flow_result: dict,
+    *,
+    predict_fn,
+    st_module,
+) -> None:
+    """통합 앱 — W9_10(list2) + W9_11(list3) 규칙·적중률 패널."""
+    if not ENABLED:
+        return
+
+    from livegame_mode_registry import DISPLAY_ORDER, get_mode, mode_label
+
+    all_rows: list[dict] = []
+    for mode in DISPLAY_ORDER:
+        cfg = get_mode(mode)
+        rows = build_prefix_rule_panel_rows(
+            flow_result,
+            predict_fn,
+            (mode,),
+            mode_label,
+            db_path=cfg.predictions_db(use_test=True),
+            profile=cfg.profile,
+        )
+        all_rows.extend(rows)
+
+    if not all_rows:
+        return
+
+    show = pd.DataFrame(all_rows)[
+        [
+            "mode",
+            "ws9_prefix",
+            "predicted",
+            "final_rule",
+            "live_n",
+            "live_accuracy_pct",
+        ]
+    ].rename(columns={
+        "mode": "모드",
+        "ws9_prefix": "ws9",
+        "predicted": "예측",
+        "final_rule": "규칙",
+        "live_n": "n",
+        "live_accuracy_pct": "적중%",
+    })
+    with st_module.expander("prefix 규칙 · 라이브 적중률", expanded=True):
+        st_module.dataframe(show, use_container_width=True, hide_index=True)

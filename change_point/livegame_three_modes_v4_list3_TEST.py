@@ -1,7 +1,8 @@
 """
-[V4 TEST · DEPRECATED] → livegame_unified_TEST.py 사용.
+[V4 TEST · LIST3 · DEPRECATED] → livegame_unified_TEST.py 사용.
 
-Cold Start → State Handoff → Live Loop 테스트용 라이브 게임 앱.
+- 예측값: db_backup/pattern_list3_TEST.db · simulation_predictions_change_point
+- ws11 prefix → ws9_core(8자) lookup · window_size=9
 """
 
 import sys
@@ -17,15 +18,17 @@ import sqlite3
 import streamlit as st
 import pandas as pd
 
-from pattern_list_profiles import LIST2_TEST_PREDICTIONS_DB
+from pattern_list3_ws9_core import to_ws9_core
+from pattern_list_profiles import LIST3_TEST_PREDICTIONS_DB
 
-PREDICTIONS_DB_PATH = LIST2_TEST_PREDICTIONS_DB
+PREDICTIONS_DB_PATH = LIST3_TEST_PREDICTIONS_DB
 PREDICTIONS_TABLE = "simulation_predictions_change_point"
 LIVE_STEP_RESULTS_TABLE = "live_step_results"
+WS9_LOOKUP = 9
 
 
 def _get_predictions_db_connection():
-    """pattern_list2_TEST.db 연결 (갱신 앱과 동일)."""
+    """pattern_list3_TEST.db 연결."""
     conn = sqlite3.connect(PREDICTIONS_DB_PATH, timeout=20.0, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
@@ -85,7 +88,7 @@ def _is_correct_to_int(value):
 
 def save_live_step_results(history: list, saved_keys: set):
     """
-    아직 저장되지 않은 스텝만 pattern_list2_TEST.db.live_step_results에 누적 INSERT.
+    아직 저장되지 않은 스텝만 pattern_list3_TEST.db.live_step_results에 누적 INSERT.
     Returns: (inserted_count, updated_saved_keys)
     """
     created_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
@@ -138,10 +141,10 @@ st.set_page_config(
     layout="wide",
 )
 
-MODES = ("v3", "window9", "window9_10")
+MODES = ("v3", "window9", "window9_11")
 WINDOW_SIZES_V3 = (9, 10, 11, 12, 13, 14)
 WINDOW_SIZES_W9 = (9,)
-WINDOW_SIZES_W9_10 = (9, 10)
+WINDOW_SIZES_W9_11 = (9, 11)
 METHOD = "빈도 기반"
 THRESHOLD = 0
 MAX_CONSECUTIVE_FAILURES = 3
@@ -197,13 +200,16 @@ def _display_predicted_value(value, skipped: bool = False) -> str:
 def _lookup_prediction(conn, window_size: int, prefix: str):
     """
     simulation_predictions_change_point 조회.
-    Returns (predicted, confidence, status) where status is 'ok' | 'pass' | 'missing'.
+    native prefix → ws9_core(8자) 정규화 후 window_size=9 lookup.
     """
+    ws9 = to_ws9_core(prefix, window_size)
+    if not ws9:
+        return None, 0.0, "missing"
     df_pred = pd.read_sql_query(
         f"SELECT predicted_value, confidence FROM {PREDICTIONS_TABLE} "
         "WHERE window_size=? AND prefix=? AND method=? AND threshold=? LIMIT 1",
         conn,
-        params=[window_size, prefix, METHOD, THRESHOLD],
+        params=[WS9_LOOKUP, ws9, METHOD, THRESHOLD],
     )
     if len(df_pred) == 0:
         return None, 0.0, "missing"
@@ -219,8 +225,8 @@ def _window_sizes_for_mode(mode: str):
         return WINDOW_SIZES_V3
     if mode == "window9":
         return WINDOW_SIZES_W9
-    if mode == "window9_10":
-        return WINDOW_SIZES_W9_10
+    if mode == "window9_11":
+        return WINDOW_SIZES_W9_11
     return WINDOW_SIZES_V3
 
 
@@ -307,7 +313,7 @@ def cold_start_for_mode(grid_string: str, mode: str):
             for window_size in window_sizes:
                 pos = next_anchor + window_size - 1
                 if pos >= len(grid_string):
-                    # V3/W9/W9_10 동일: 문자열 끝이면 앵커 유지, current_pos만 설정 후 루프 탈출
+                    # V3/W9/W9_11 동일: 문자열 끝이면 앵커 유지, current_pos만 설정 후 루프 탈출
                     current_pos = len(grid_string)
                     anchor_completed = False
                     last_window_used = (window_size - 1) if window_size > min_ws else None
@@ -342,7 +348,7 @@ def cold_start_for_mode(grid_string: str, mode: str):
                             anchors.append(current_pos)
                             anchor_idx = len(anchors) - 1
                         break
-                    if mode == "window9_10":
+                    if mode == "window9_11":
                         last_pos = pos
                     continue
 
@@ -400,7 +406,7 @@ def cold_start_for_mode(grid_string: str, mode: str):
                     break
 
             else:
-                if mode == "window9_10" and last_pos is not None:
+                if mode == "window9_11" and last_pos is not None:
                     current_pos = last_pos + 1
                     anchor_idx = _first_anchor_from_position(anchors, current_pos)
                     if anchor_idx >= len(anchors):
@@ -555,7 +561,7 @@ def live_step_for_mode(state: dict, grid_string: str, history: list, user_input:
     search_from = state.get("search_from", state.get("current_pos", 0))
 
     if ok:
-        # V3/W9/W9_10 동일: 다음 앵커 = next_pos 이상 첫 앵커, next_window = 9
+        # V3/W9/W9_11 동일: 다음 앵커 = next_pos 이상 첫 앵커, next_window = 9
         new_search_from = next_pos
         new_anchor_idx = _first_anchor_from_position(new_anchors, new_search_from)
         if new_anchor_idx >= len(new_anchors):
@@ -579,7 +585,7 @@ def live_step_for_mode(state: dict, grid_string: str, history: list, user_input:
                 new_anchor_idx = len(new_anchors) - 1
             new_fc = 0
             new_next_window = 9
-        elif mode == "window9_10":
+        elif mode == "window9_11":
             rest = [w for w in window_sizes if w > window_size]
             if rest:
                 new_search_from = search_from
@@ -661,8 +667,8 @@ def render_grid_string_and_anchors(grid_string: str, anchors: list = None):
     st.caption("위: 문자 | 가운데: 포지션 인덱스(0~) | 아래: 앵커 인덱스(0,1,...). 연한 파란색=앵커(변화점)")
 
 
-# UI 표시 순서: W9_10 → V3 → W9
-DISPLAY_ORDER = ("window9_10", "v3", "window9")
+# UI 표시 순서: W9_11 → V3 → W9
+DISPLAY_ORDER = ("window9_11", "v3", "window9")
 
 
 def _mode_label(mode: str) -> str:
@@ -670,11 +676,11 @@ def _mode_label(mode: str) -> str:
         return "V3"
     if mode == "window9":
         return "W9"
-    return "W9_10"
+    return "W9_11"
 
 
 def build_current_state_table(flow_result: dict) -> list:
-    """현재 포지션(다음 예측 위치)에 대해 3가지 검증별 예측값(P/B). 1행 테이블. 칼럼 순서: Position, W9_10, V3, W9."""
+    """현재 포지션(다음 예측 위치)에 대해 3가지 검증별 예측값(P/B). 1행 테이블. 칼럼 순서: Position, W9_11, V3, W9."""
     gs = flow_result.get("grid_string") or ""
     results = flow_result.get("results") or {}
     pos = len(gs)
@@ -689,7 +695,7 @@ def build_current_state_table(flow_result: dict) -> list:
 
 
 def build_validation_history_table_by_position(flow_result: dict) -> list:
-    """포지션 0부터 max까지 한 행에 한 포지션, 열 순서: Position, W9_10, V3, W9 (각 예측/실제/일치)."""
+    """포지션 0부터 max까지 한 행에 한 포지션, 열 순서: Position, W9_11, V3, W9 (각 예측/실제/일치)."""
     results = flow_result.get("results") or {}
     gs = flow_result.get("grid_string") or ""
     by_pos = {}
@@ -715,19 +721,19 @@ def build_validation_history_table_by_position(flow_result: dict) -> list:
     rows = []
     for pos in range(0, max_pos + 1):
         d = by_pos.get(pos, {})
-        w910 = d.get("window9_10", {})
+        w911 = d.get("window9_11", {})
         v3 = d.get("v3", {})
         w9 = d.get("window9", {})
         if not any(_history_entry_visible(d.get(m, {})) for m in MODES):
             continue
-        match_w910 = _match_label(w910.get("is_correct"), w910.get("predicted_raw"))
+        match_w911 = _match_label(w911.get("is_correct"), w911.get("predicted_raw"))
         match_v3 = _match_label(v3.get("is_correct"), v3.get("predicted_raw"))
         match_w9 = _match_label(w9.get("is_correct"), w9.get("predicted_raw"))
         row = {
             "Position": pos,
-            "W9_10_예측": w910.get("predicted", "-"),
-            "W9_10_실제": w910.get("actual", "-"),
-            "W9_10_일치": match_w910,
+            "W9_11_예측": w911.get("predicted", "-"),
+            "W9_11_실제": w911.get("actual", "-"),
+            "W9_11_일치": match_w911,
             "V3_예측": v3.get("predicted", "-"),
             "V3_실제": v3.get("actual", "-"),
             "V3_일치": match_v3,
@@ -765,9 +771,9 @@ def main():
     st.title("Change-point 플로우 라이브 게임 v4 · TEST")
     st.warning(
         f"**테스트용 라이브 앱** — 예측/결과 DB: `{PREDICTIONS_DB_PATH}` "
-        f"(예측 테이블 갱신 앱과 동일). 운영 `pattern_list2.db` 는 사용하지 않습니다."
+        f"(예측 테이블 갱신 앱과 동일). ws11 → ws9_core lookup · `{LIST3_TEST_PREDICTIONS_DB.name}`"
     )
-    st.markdown("**Cold Start → State Handoff → Live Loop** · W9_10 / V3 / 윈도우 9 병렬 실행")
+    st.markdown("**Cold Start → State Handoff → Live Loop** · W9_11 / V3 / 윈도우 9 병렬 실행")
     st.caption(
         f"예측 DB: `{PREDICTIONS_DB_PATH}` · `{PREDICTIONS_TABLE}` · "
         f"결과 저장: `{LIVE_STEP_RESULTS_TABLE}` (스텝 누적 · TEST)"
@@ -803,10 +809,10 @@ def main():
                     try:
                         r_v3 = cold_start_for_mode(s, "v3")
                         r_w9 = cold_start_for_mode(s, "window9")
-                        r_w910 = cold_start_for_mode(s, "window9_10")
+                        r_w911 = cold_start_for_mode(s, "window9_11")
                         st.session_state.flow_result = {
                             "grid_string": s,
-                            "results": {"v3": r_v3, "window9": r_w9, "window9_10": r_w910},
+                            "results": {"v3": r_v3, "window9": r_w9, "window9_11": r_w911},
                         }
                         st.session_state.flow_saved_step_keys = set()
                         st.session_state.pop("flow_last_save_info", None)
@@ -834,7 +840,7 @@ def main():
         render_grid_string_and_anchors(gs, anchors=anchors)
 
         st.markdown("### 현재 상태 (현재 포지션에 대한 3가지 검증 예측값)")
-        # 모드별 state 디버깅 정보 · 표시 순서: W9_10 → V3 → W9
+        # 모드별 state 디버깅 정보 · 표시 순서: W9_11 → V3 → W9
         for mode in DISPLAY_ORDER:
             r = results.get(mode, {})
             state = r.get("state") or {}
@@ -852,7 +858,7 @@ def main():
         st.caption("위 Grid의 포지션 인덱스·앵커 인덱스(a0,a1,…)와 동일한 0-based 기준")
         current_table = build_current_state_table(result)
         st.dataframe(pd.DataFrame(current_table), use_container_width=True, hide_index=True)
-        st.caption("다음 예측 위치 = len(grid_string). W9_10 / V3 / W9 각각 예측값(P 또는 B, NULL이면 pass, 없으면 -).")
+        st.caption("다음 예측 위치 = len(grid_string). W9_11 / V3 / W9 각각 예측값(P 또는 B, NULL이면 pass, 없으면 -).")
 
         try:
             from livegame_prefix_rule_panel import render_prefix_rule_panel
@@ -868,13 +874,13 @@ def main():
                 db_path=PREDICTIONS_DB_PATH,
             )
 
-        # 테이블 바로 아래 첫 번째 줄: W9_10 예측 신뢰도 (confidence는 0~100 저장)
-        r_w910 = result.get("results") or {}
-        state_w910 = r_w910.get("window9_10", {}).get("state") or {}
-        pred_w910 = predict_next_for_mode(state_w910, gs, "window9_10")
-        if pred_w910.get("predicted") and not pred_w910.get("skipped"):
-            conf = pred_w910.get("confidence", 0.0)
-            st.caption(f"**W9_10** 예측 신뢰도: {conf:.2f}%")
+        # 테이블 바로 아래 첫 번째 줄: W9_11 예측 신뢰도 (confidence는 0~100 저장)
+        r_w911 = result.get("results") or {}
+        state_w911 = r_w911.get("window9_11", {}).get("state") or {}
+        pred_w911 = predict_next_for_mode(state_w911, gs, "window9_11")
+        if pred_w911.get("predicted") and not pred_w911.get("skipped"):
+            conf = pred_w911.get("confidence", 0.0)
+            st.caption(f"**W9_11** 예측 신뢰도: {conf:.2f}%")
 
         st.caption("B / P 입력 (3모드 동시 단일 스텝 검증)")
         col_b, col_p, _ = st.columns([1, 1, 4])
@@ -917,7 +923,7 @@ def main():
                 except Exception as e:
                     st.error(f"live_step 실패: {e}")
 
-        st.markdown("### 검증 히스토리 테이블 (포지션별 W9_10 / V3 / W9)")
+        st.markdown("### 검증 히스토리 테이블 (포지션별 W9_11 / V3 / W9)")
         history_rows = build_validation_history_table_by_position(result)
         if history_rows:
             df_history = pd.DataFrame(history_rows)
@@ -932,7 +938,7 @@ def main():
             col = [c1, c2, c3][idx]
             with col:
                 summ = results.get(mode, {}).get("summary") or _empty_summary()
-                label = "윈도우 9·10" if mode == "window9_10" else ("V3 (9~14)" if mode == "v3" else "윈도우 9")
+                label = "윈도우 9·11" if mode == "window9_11" else ("V3 (9~14)" if mode == "v3" else "윈도우 9")
                 st.markdown(f"**{label}**")
                 st.metric("총 스텝", summ.get("total_steps", 0))
                 st.metric("총 예측", summ.get("total_predictions", 0))

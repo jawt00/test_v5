@@ -1,12 +1,12 @@
 """
-pattern_list2 예측 스냅샷 · 라이브 적중률 평가 · 현재 테이블 복원.
+pattern_list3 예측 스냅샷 · 라이브 적중률 평가 · 현재 테이블 복원.
 
-list2 프로필은 테스트 완료 전까지 db_backup/pattern_list2_TEST.db 대상.
-운영 라이브 DB(pattern_list2.db)와 분리됨.
+list2 프로필은 테스트 완료 전까지 db_backup/pattern_list3_TEST.db 대상.
+운영 라이브 DB(pattern_list3.db)와 분리됨.
 
-  python3 change_point/pattern_list2_snapshot.py --list-runs
-  python3 change_point/pattern_list2_snapshot.py --eval --from 2026-06-01 --to 2026-06-25
-  python3 change_point/pattern_list2_snapshot.py --restore RUN_ID
+  python3 change_point/pattern_list3_snapshot.py --list-runs
+  python3 change_point/pattern_list3_snapshot.py --eval --from 2026-06-01 --to 2026-06-25
+  python3 change_point/pattern_list3_snapshot.py --restore RUN_ID
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pattern_list2_refresh import (
+from pattern_list3_refresh import (
     PIPELINE_STATE_TABLE,
     RefreshResult,
     ensure_pipeline_state_schema,
@@ -31,7 +31,7 @@ from pattern_list2_refresh import (
     set_pipeline_state,
 )
 from pattern_list_final_confidence import migrate_sim_extra_columns
-from pattern_list2_sim_predictions import (
+from pattern_list3_sim_predictions import (
     METHOD,
     THRESHOLD,
     WINDOW_SIZE,
@@ -40,7 +40,7 @@ from pattern_list2_sim_predictions import (
     save_simulation_predictions,
 )
 from pattern_list_profiles import PatternListProfile, get_profile
-from pattern_predictions_compare_app import build_comparison_df
+from pattern_list3_compare import build_comparison_df, cmp_row_for_rules
 
 KST = timezone(timedelta(hours=9))
 
@@ -180,8 +180,9 @@ def build_snapshot_df(
     ctx = cmp_df.copy()
     ctx["prefix"] = ctx["ws9_core"].astype(str).str.strip().str.lower()
     ctx["sim_pred_norm"] = ctx["sim_pred"].map(_norm_pred)
-    ctx["ngram12_pred_norm"] = ctx["ngram12_pred"].map(_norm_pred)
-    ctx["grid10_pred_norm"] = ctx["grid10_pred"].map(_norm_pred)
+    ctx["ngram12_pred_norm"] = ctx["ngram13_pred"].map(_norm_pred)
+    ctx["grid10_pred_norm"] = ctx["grid11_pred"].map(_norm_pred)
+    ctx["agree_sim_grid10"] = ctx["agree_sim_grid11"]
 
     ctx_cols = [
         "prefix",
@@ -672,8 +673,8 @@ def get_active_rule_version(profile: PatternListProfile) -> str | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="pattern_list2 예측 스냅샷 관리")
-    parser.add_argument("--profile", default="list2", choices=["list1", "list2"])
+    parser = argparse.ArgumentParser(description="pattern_list3 예측 스냅샷 관리")
+    parser.add_argument("--profile", default="list3", choices=["list3"])
     parser.add_argument("--list-runs", action="store_true", help="run 목록")
     parser.add_argument("--eval", action="store_true", help="전 run 라이브 적중률 평가")
     parser.add_argument("--from", dest="eval_from", default=None, help="평가 시작일")

@@ -15,6 +15,10 @@ SOURCE_DB = CHANGE_POINT_DIR / "change_point_ngram.db"
 LIST2_LIVE_PREDICTIONS_DB = CHANGE_POINT_DIR / "pattern_list2.db"
 # 예측 테이블 갱신/비교/스냅샷 파이프라인 전용 테스트 DB.
 LIST2_TEST_PREDICTIONS_DB = DB_BACKUP_DIR / "pattern_list2_TEST.db"
+LIST3_LIVE_PREDICTIONS_DB = CHANGE_POINT_DIR / "pattern_list3.db"
+LIST3_TEST_PREDICTIONS_DB = DB_BACKUP_DIR / "pattern_list3_TEST.db"
+
+NGRAM_CSV_NAME_LIST3 = "ngram_chunks_ws13.csv"
 
 __all__ = [
     "PROJECT_ROOT",
@@ -23,6 +27,9 @@ __all__ = [
     "SOURCE_DB",
     "LIST2_LIVE_PREDICTIONS_DB",
     "LIST2_TEST_PREDICTIONS_DB",
+    "LIST3_LIVE_PREDICTIONS_DB",
+    "LIST3_TEST_PREDICTIONS_DB",
+    "NGRAM_CSV_NAME_LIST3",
     "GRID_CSV_NAME",
     "NGRAM_CSV_NAME",
     "TABLE_GRID",
@@ -67,6 +74,14 @@ PROFILES: dict[str, PatternListProfile] = {
         # 라이브는 LIST2_LIVE_PREDICTIONS_DB (pattern_list2.db) 고정.
         predictions_db=LIST2_TEST_PREDICTIONS_DB,
         json_name_prefix="prefix_list2_new_3way_agree",
+        is_test_db=True,
+    ),
+    "list3": PatternListProfile(
+        name="list3",
+        pattern_csv=PROJECT_ROOT / "pattern_list3.csv",
+        export_dir=CHANGE_POINT_DIR / "pattern_list3_exports",
+        predictions_db=LIST3_TEST_PREDICTIONS_DB,
+        json_name_prefix="prefix_list3_new_3way_agree",
         is_test_db=True,
     ),
 }

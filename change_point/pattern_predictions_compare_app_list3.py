@@ -1,4 +1,4 @@
-"""pattern_list2 전용 3-way 비교 앱 (최종 예측 규칙 포함)."""
+"""pattern_list3 전용 3-way 비교 앱 (ws11/ws13 · ws9_core 8자)."""
 
 from __future__ import annotations
 
@@ -14,10 +14,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pattern_list_profiles import CHANGE_POINT_DIR, SOURCE_DB, get_profile
 
 try:
-    from pattern_list_profiles import LIST2_LIVE_PREDICTIONS_DB
+    from pattern_list_profiles import LIST3_LIVE_PREDICTIONS_DB
 except ImportError:
-    LIST2_LIVE_PREDICTIONS_DB = CHANGE_POINT_DIR / "pattern_list2.db"
-from pattern_list2_final_rules import (
+    LIST3_LIVE_PREDICTIONS_DB = CHANGE_POINT_DIR / "pattern_list3.db"
+from pattern_list3_compare import (
+    aggregate_by_ext,
+    build_comparison_df,
+    cmp_row_for_rules,
+    format_display_df,
+)
+from pattern_list3_final_rules import (
     FINAL_RULE_INFO,
     RULE_ORDER,
     build_rule_engine,
@@ -26,15 +32,16 @@ from pattern_list2_final_rules import (
     normalize_enabled_rules,
 )
 from pattern_list_final_confidence import compute_final_confidence
-from pattern_list2_refresh import run_refresh
+from pattern_list3_refresh import run_refresh
 from extract_pattern_list_data import get_max_source_grid_string_id
-from pattern_list2_sim_predictions import (
+from pattern_list3_sim_predictions import (
     TABLE_SIM,
     build_simulation_predictions_df,
+    copy_sim_table_to_live,
     count_simulation_predictions,
 )
-import pattern_list2_pred_history as _pred_history
-from pattern_list2_snapshot import (
+import pattern_list3_pred_history as _pred_history
+from pattern_list3_snapshot import (
     diff_snapshots,
     evaluate_all_runs,
     get_active_run_id,
@@ -43,11 +50,6 @@ from pattern_list2_snapshot import (
     load_latest_scores,
     load_snapshot,
     restore_snapshot_to_current,
-)
-from pattern_predictions_compare_app import (
-    _aggregate_by_ext,
-    _format_display_df,
-    build_comparison_df,
 )
 
 
@@ -58,7 +60,7 @@ def _enabled_rules_from_session() -> frozenset[str]:
     return normalize_enabled_rules(selected)
 
 
-def _build_summary_table_list2(
+def _build_summary_table_list3(
     df: pd.DataFrame,
     *,
     compute_fn=compute_final_prediction,
@@ -80,22 +82,23 @@ def _build_summary_table_list2(
             return "N"
         return "-"
 
-    grid12_match = df.apply(
-        lambda r: r["sim_pred"] == r["grid12_pred"]
-        if pd.notna(r["sim_pred"]) and pd.notna(r["grid12_pred"])
+    grid13_match = df.apply(
+        lambda r: r["sim_pred"] == r["grid13_pred"]
+        if pd.notna(r["sim_pred"]) and pd.notna(r["grid13_pred"])
         else None,
         axis=1,
     )
 
-    final_preds = df.apply(compute_fn, axis=1)
-    final_rules = df.apply(classify_fn, axis=1)
+    final_preds = df.apply(lambda r: compute_fn(cmp_row_for_rules(r)), axis=1)
+    final_rules = df.apply(lambda r: classify_fn(cmp_row_for_rules(r)), axis=1)
 
     conf_rows = []
     for _, r in df.iterrows():
-        fp = compute_fn(r)
-        fr = classify_fn(r)
+        rr = cmp_row_for_rules(r)
+        fp = compute_fn(rr)
+        fr = classify_fn(rr)
         meta = compute_final_confidence(
-            r, final_rule=fr, final_pred=fp, profile="list2"
+            rr, final_rule=fr, final_pred=fp, profile="list3"
         )
         rc = meta["rule_confidence"]
         mac = meta["mean_agree_conf"]
@@ -115,12 +118,12 @@ def _build_summary_table_list2(
             "sim 예측": df["sim_pred"].map(_pred),
             "sim 신뢰도": df["sim_conf"].map(_conf),
             "sim 빈도": df["sim_freq"].map(_freq),
-            "grid10 예측": df["grid10_pred"].map(_pred),
-            "grid10 일치": df["agree_sim_grid10"].map(_yn),
-            "grid12 예측": df["grid12_pred"].map(_pred),
-            "grid12 일치": grid12_match.map(_yn),
-            "ngram12 예측": df["ngram12_pred"].map(_pred),
-            "ngram12 일치": df["agree_sim_ngram"].map(_yn),
+            "grid11 예측": df["grid11_pred"].map(_pred),
+            "grid11 일치": df["agree_sim_grid11"].map(_yn),
+            "grid13 예측": df["grid13_pred"].map(_pred),
+            "grid13 일치": grid13_match.map(_yn),
+            "ngram13 예측": df["ngram13_pred"].map(_pred),
+            "ngram13 일치": df["agree_sim_ngram"].map(_yn),
             "전체 일치": df["agree_all"].map(_yn),
             "신규 3-way 일치": df["agree_new_three"].map(_yn),
             "적용 규칙": final_rules,
@@ -135,17 +138,17 @@ def _build_summary_table_list2(
 
 
 def main() -> None:
-    profile = get_profile("list2")
+    profile = get_profile("list3")
 
     st.set_page_config(
-        page_title="예측 테이블 3-way 비교 (LIST2 · TEST)",
+        page_title="예측 테이블 3-way 비교 (LIST3 · TEST)",
         page_icon="📊",
         layout="wide",
     )
-    st.title("예측 테이블 3-way 비교 (LIST2 · TEST DB)")
+    st.title("예측 테이블 3-way 비교 (LIST3 · TEST DB)")
     st.caption(
-        f"⚠ TEST `{profile.predictions_db.name}` · live `{LIST2_LIVE_PREDICTIONS_DB.name}` 미갱신 · "
-        f"{SOURCE_DB.name} · ws9"
+        f"⚠ TEST `{profile.predictions_db.name}` · live `{LIST3_LIVE_PREDICTIONS_DB.name}` 별도 · "
+        f"{SOURCE_DB.name} · ws9_core(8)"
     )
 
     if not profile.pattern_csv.is_file():
@@ -155,7 +158,7 @@ def main() -> None:
     if not profile.predictions_db.is_file():
         st.error(
             f"테스트 predictions DB 없음: `{profile.predictions_db}` · "
-            f"`db_backup/pattern_list2_TEST.db` 를 확인하세요."
+            f"`db_backup/pattern_list3_TEST.db` 를 확인하세요."
         )
         return
 
@@ -240,7 +243,7 @@ def main() -> None:
                 f"grid_id {last_res.previous_grid_string_id}→{last_res.max_grid_string_id}"
             )
 
-    cmp_df, meta = build_comparison_df("list2")
+    cmp_df, meta = build_comparison_df("list3")
     if cmp_df.empty:
         st.warning("비교 데이터를 만들 수 없습니다.")
         return
@@ -250,15 +253,15 @@ def main() -> None:
 
     hits = meta["hits"]
     tc = meta["table_counts"]
-    final_series = cmp_df.apply(preview_compute, axis=1)
+    final_series = cmp_df.apply(lambda r: preview_compute(cmp_row_for_rules(r)), axis=1)
     n_final = int((final_series != "pass").sum())
 
     c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
     c1.metric("pattern_list", meta["pattern_rows"])
     c2.metric("sim (ws9)", f"{hits['sim']}/{meta['pattern_rows']}")
-    c3.metric("grid10", f"{hits['grid10']}/{meta['pattern_rows']}")
-    c4.metric("grid12", f"{hits['grid12']}/{meta['pattern_rows']}")
-    c5.metric("ngram12", f"{hits['ngram12']}/{meta['pattern_rows']}")
+    c3.metric("grid11", f"{hits['grid11']}/{meta['pattern_rows']}")
+    c4.metric("grid13", f"{hits['grid13']}/{meta['pattern_rows']}")
+    c5.metric("ngram13", f"{hits['ngram13']}/{meta['pattern_rows']}")
     c6.metric("전체 일치", meta["agree_all"])
     c7.metric("신규 3-way 일치", meta["agree_new_three"])
     c8.metric("최종 예측", n_final)
@@ -286,12 +289,14 @@ def main() -> None:
     with f2:
         final_only = st.checkbox("최종 예측만 (pass 제외)", value=False)
     with f3:
-        ext_filter = st.selectbox("ws12 앞2글자", ["전체", "bp", "pb"], index=0)
+        ext_filter = st.selectbox("ws13 앞2글자", ["전체", "bp", "pb"], index=0)
     with f4:
-        search = st.text_input("prefix 검색 (ws9 / ws10 / ws12)", "")
+        search = st.text_input("prefix 검색 (ws9 / ws11 / ws13)", "")
 
     filtered = cmp_df.copy()
-    filtered["최종 예측"] = filtered.apply(preview_compute, axis=1)
+    filtered["최종 예측"] = filtered.apply(
+        lambda r: preview_compute(cmp_row_for_rules(r)), axis=1
+    )
     if ext_filter != "전체":
         filtered = filtered[filtered["prefix_ext"] == ext_filter]
     if mismatch_only:
@@ -302,8 +307,8 @@ def main() -> None:
         q = search.strip().lower()
         filtered = filtered[
             filtered["ws9_core"].str.contains(q, na=False)
-            | filtered["ws10_full"].str.contains(q, na=False)
-            | filtered["ws12_full"].str.contains(q, na=False)
+            | filtered["ws11_full"].str.contains(q, na=False)
+            | filtered["ws13_full"].str.contains(q, na=False)
         ]
 
     tab1, tab2, tab3, tab4 = st.tabs(
@@ -312,7 +317,7 @@ def main() -> None:
 
     with tab1:
         st.markdown("### 취합 비교 — simulation ws9 prefix 기준")
-        show = _build_summary_table_list2(
+        show = _build_summary_table_list3(
             filtered.drop(columns=["최종 예측"], errors="ignore"),
             compute_fn=preview_compute,
             classify_fn=preview_classify,
@@ -377,35 +382,40 @@ def main() -> None:
             st.session_state.last_refresh_result = res
             st.rerun()
 
+        if st.button("LIVE DB로 sim 복사", type="secondary"):
+            with st.spinner("LIVE 복사 중..."):
+                n = copy_sim_table_to_live(profile)
+            st.success(f"LIVE `{LIST3_LIVE_PREDICTIONS_DB.name}` 에 {n}행 복사")
+
     with tab2:
         st.markdown("### 윈도우별 native prefix")
         ext_cols = [
             "ws9_core",
-            "pad10",
-            "ws10_full",
-            "pad12",
-            "ws12_full",
+            "pad11",
+            "ws11_full",
+            "pad13",
+            "ws13_full",
             "prefix_visual",
             "sim_pred",
             "sim_conf",
-            "grid10_pred",
-            "grid10_conf",
-            "grid12_pred",
-            "grid12_conf",
-            "ngram12_pred",
-            "ngram12_conf",
+            "grid11_pred",
+            "grid11_conf",
+            "grid13_pred",
+            "grid13_conf",
+            "ngram13_pred",
+            "ngram13_conf",
             "ngram_ws9_ok",
             "agree_all",
             "최종 예측",
             "missing_sources",
         ]
-        show2 = _format_display_df(filtered[ext_cols])
+        show2 = format_display_df(filtered[ext_cols])
         show2.insert(0, "No", range(1, len(show2) + 1))
         st.dataframe(show2, use_container_width=True, hide_index=True)
 
     with tab3:
-        st.markdown("### ws12 prefix_ext별 집계")
-        st.dataframe(_aggregate_by_ext(cmp_df), use_container_width=True, hide_index=True)
+        st.markdown("### ws13 prefix_ext별 집계")
+        st.dataframe(aggregate_by_ext(cmp_df), use_container_width=True, hide_index=True)
 
     with tab4:
         st.markdown("### 스냅샷 이력 · 라이브 적중률 · 복원")
@@ -506,8 +516,8 @@ def main() -> None:
                             "final_rule",
                             "confidence",
                             "sim_pred",
-                            "ngram12_pred",
-                            "grid10_pred",
+                            "ngram13_pred",
+                            "grid11_pred",
                         ]
                     ],
                     use_container_width=True,
@@ -551,7 +561,7 @@ def main() -> None:
         "규칙 버전은 `prediction_build_runs.rule_version` 에 기록"
     )
     current_rules = {
-        str(r["ws9_core"]).strip().lower(): preview_classify(r)
+        str(r["ws9_core"]).strip().lower(): preview_classify(cmp_row_for_rules(r))
         for _, r in filtered.iterrows()
         if pd.notna(r.get("ws9_core")) and str(r["ws9_core"]).strip()
     }

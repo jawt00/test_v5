@@ -1,12 +1,14 @@
-"""list2 취합비교 최종 예측 → simulation_predictions_change_point 형식 저장."""
+"""list3 취합비교 최종 예측 → simulation_predictions_change_point (ws9 · 8자)."""
 
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from typing import Callable
 
 import pandas as pd
 
+from pattern_list3_compare import cmp_row_for_rules
 from pattern_list_final_confidence import (
     SIM_INSERT_EXTRA_COLUMNS,
     compute_final_confidence,
@@ -122,12 +124,12 @@ def _load_sim_win_rate_lookup() -> dict[str, float | None]:
 def _pick_metrics(
     row: pd.Series,
     ngram_lookup: dict,
-    grid10_lookup: dict,
+    grid11_lookup: dict,
     sim_lookup: dict,
     final_pred: str,
 ) -> dict:
-    ws12 = _norm_prefix(row.get("ws12_full"))
-    ws10 = _norm_prefix(row.get("ws10_full"))
+    ws13 = _norm_prefix(row.get("ws13_full"))
+    ws11 = _norm_prefix(row.get("ws11_full"))
     ws9 = _norm_prefix(row.get("ws9_core"))
 
     def _as_bp(v) -> str | None:
@@ -138,22 +140,22 @@ def _pick_metrics(
 
     fp = final_pred.lower() if final_pred and final_pred != "pass" else ""
     sim_p = _as_bp(row.get("sim_pred"))
-    ng_p = _as_bp(row.get("ngram12_pred"))
+    ng_p = _as_bp(row.get("ngram13_pred"))
 
     prefer_sim = bool(fp and sim_p == fp and ng_p is not None and ng_p != fp)
     if prefer_sim and ws9 and ws9 in sim_lookup:
         return sim_lookup[ws9]
 
-    for key in (ws12, ws10, ws9):
+    for key in (ws13, ws11, ws9):
         if key and key in ngram_lookup:
             return ngram_lookup[key]
-    if ws10 and ws10 in grid10_lookup:
-        return grid10_lookup[ws10]
+    if ws11 and ws11 in grid11_lookup:
+        return grid11_lookup[ws11]
     if ws9 and ws9 in sim_lookup:
         return sim_lookup[ws9]
 
-    conf = row.get("ngram12_conf") or row.get("grid10_conf") or row.get("sim_conf")
-    freq = row.get("ngram12_freq") or row.get("grid10_freq") or row.get("sim_freq")
+    conf = row.get("ngram13_conf") or row.get("grid11_conf") or row.get("sim_conf")
+    freq = row.get("ngram13_freq") or row.get("grid11_freq") or row.get("sim_freq")
     if prefer_sim:
         conf = row.get("sim_conf") or conf
         freq = row.get("sim_freq") or freq
@@ -184,7 +186,7 @@ def build_simulation_predictions_df(
     rule_version: str | None = None,
 ) -> pd.DataFrame:
     if classify_final_rule_fn is None or rule_version is None:
-        from pattern_list2_final_rules import (
+        from pattern_list3_final_rules import (
             DEFAULT_RULE_VERSION,
             classify_final_rule,
         )
@@ -194,15 +196,16 @@ def build_simulation_predictions_df(
         if rule_version is None:
             rule_version = DEFAULT_RULE_VERSION
 
-    ngram_lookup = _load_metric_lookup(profile.predictions_db, TABLE_NGRAM, window_size=12)
-    grid10_lookup = _load_metric_lookup(profile.predictions_db, TABLE_GRID, window_size=10)
+    ngram_lookup = _load_metric_lookup(profile.predictions_db, TABLE_NGRAM, window_size=13)
+    grid11_lookup = _load_metric_lookup(profile.predictions_db, TABLE_GRID, window_size=11)
     sim_lookup = _load_metric_lookup(SOURCE_DB, TABLE_SIM, window_size=9)
     sim_wr_lookup = _load_sim_win_rate_lookup()
 
     rows = []
     for _, row in cmp_df.iterrows():
-        final = final_pred_fn(row)
-        final_rule = classify_final_rule_fn(row)
+        rule_row = cmp_row_for_rules(row)
+        final = final_pred_fn(rule_row)
+        final_rule = classify_final_rule_fn(rule_row)
         prefix = _norm_prefix(row["ws9_core"])
         if not prefix:
             continue
@@ -218,12 +221,12 @@ def build_simulation_predictions_df(
             conf_meta = empty_confidence_row(final_rule)
             predicted_value = None
         else:
-            metrics = _pick_metrics(row, ngram_lookup, grid10_lookup, sim_lookup, final)
+            metrics = _pick_metrics(row, ngram_lookup, grid11_lookup, sim_lookup, final)
             conf_meta = compute_final_confidence(
-                row,
+                rule_row,
                 final_rule=final_rule,
                 final_pred=final,
-                profile="list2",
+                profile="list3",
             )
             predicted_value = final.lower()
 
@@ -309,8 +312,6 @@ def save_simulation_predictions(
     replace: bool = False,
     db_path=None,
 ) -> int:
-    from pathlib import Path
-
     target = db_path or profile.predictions_db
     target = Path(target) if not isinstance(target, Path) else target
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -354,3 +355,24 @@ def count_simulation_predictions(profile: PatternListProfile) -> int:
         return 0
     finally:
         conn.close()
+
+
+def copy_sim_table_to_live(profile: PatternListProfile, live_db_path=None) -> int:
+    from pattern_list_profiles import LIST3_LIVE_PREDICTIONS_DB
+
+    live_path = Path(live_db_path or LIST3_LIVE_PREDICTIONS_DB)
+    if not profile.predictions_db.is_file():
+        return 0
+    conn = sqlite3.connect(profile.predictions_db)
+    try:
+        df = pd.read_sql_query(
+            f"SELECT * FROM {TABLE_SIM} WHERE method = ? AND threshold = ?",
+            conn,
+            params=[METHOD, THRESHOLD],
+        )
+    finally:
+        conn.close()
+    if df.empty:
+        return 0
+    cols = [c for c in _INSERT_COLS if c in df.columns]
+    return save_simulation_predictions(profile, df[cols], replace=True, db_path=live_path)

@@ -1,9 +1,9 @@
 """simulation_predictions_change_point 갱신 이력 와이드 테이블 빌더.
 
-예측값 + final_rule 이력을 오래된 순(왼쪽)으로 구성.
-list2 앱 전용. pattern_list2_snapshot / refresh 와 import 순환을 피하기 위해 분리.
+예측값 + final_rule + rule_confidence/conf_source 이력을 오래된 순(왼쪽)으로 구성.
+list3 앱 전용. pattern_list3_snapshot / refresh 와 import 순환을 피하기 위해 분리.
 
-MODULE_API = 2  # current_rules 인자 + (pred_wide, rule_wide, meta) 반환
+MODULE_API = 4  # (pred_wide, rule_wide, conf_wide, source_wide, meta) 반환
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import sqlite3
 import pandas as pd
 
 from pattern_list_profiles import PatternListProfile
-from pattern_list2_sim_predictions import METHOD, TABLE_SIM, THRESHOLD, WINDOW_SIZE
+from pattern_list3_sim_predictions import METHOD, TABLE_SIM, THRESHOLD, WINDOW_SIZE
 
 MODULE_API = 4
 
@@ -56,12 +56,12 @@ def _fmt_history_source(value) -> str:
 
 
 def _rule_display(rule_id: str | None) -> str:
-    """R1 → 'R1 · 3-way 일치' 등. list2 모듈을 lazy import."""
+    """R1 → 'R1 · 3-way 일치' 등. list3 모듈을 lazy import."""
     rid = _fmt_history_rule(rule_id)
     if rid == "-":
         return "-"
     try:
-        from pattern_list2_final_rules import FINAL_RULE_INFO
+        from pattern_list3_final_rules import FINAL_RULE_INFO
 
         info = FINAL_RULE_INFO.get(rid)
         if info and info.get("label"):
@@ -241,7 +241,7 @@ def build_prediction_history_wide(
         )
 
     used_labels: set[str] = set()
-    run_labels: list[tuple[str, str, str]] = []  # run_id, label, rule_version
+    run_labels: list[tuple[str, str, str]] = []
     for _, r in runs_df.iterrows():
         label = _column_label_for_run(str(r["created_at"]), str(r["run_id"]), used_labels)
         rv = str(r["rule_version"]) if pd.notna(r.get("rule_version")) else ""

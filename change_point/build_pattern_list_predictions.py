@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pattern_list_profiles import (
     GRID_CSV_NAME,
     NGRAM_CSV_NAME,
+    NGRAM_CSV_NAME_LIST3,
     TABLE_GRID,
     TABLE_NGRAM,
     PatternListProfile,
@@ -212,7 +213,8 @@ def create_and_load_predictions_table(
 
 def run_build(profile: PatternListProfile) -> None:
     grid_csv = profile.export_dir / GRID_CSV_NAME
-    ngram_csv = profile.export_dir / NGRAM_CSV_NAME
+    ngram_name = NGRAM_CSV_NAME_LIST3 if profile.name == "list3" else NGRAM_CSV_NAME
+    ngram_csv = profile.export_dir / ngram_name
 
     if not grid_csv.is_file():
         raise FileNotFoundError(
@@ -237,11 +239,13 @@ def run_build(profile: PatternListProfile) -> None:
     finally:
         conn.close()
 
-    ws10_n = len(grid_pred[grid_pred.window_size == 10]) if not grid_pred.empty else 0
-    ws12_n = len(grid_pred[grid_pred.window_size == 12]) if not grid_pred.empty else 0
+    ws_low = 11 if profile.name == "list3" else 10
+    ws_high = 13 if profile.name == "list3" else 12
+    ws_low_n = len(grid_pred[grid_pred.window_size == ws_low]) if not grid_pred.empty else 0
+    ws_high_n = len(grid_pred[grid_pred.window_size == ws_high]) if not grid_pred.empty else 0
     print(f"Profile: {profile.name}")
     print(f"DB: {profile.predictions_db}")
-    print(f"[1] {TABLE_GRID}: {n_grid} rows (ws10={ws10_n}, ws12={ws12_n})")
+    print(f"[1] {TABLE_GRID}: {n_grid} rows (ws{ws_low}={ws_low_n}, ws{ws_high}={ws_high_n})")
     print(f"[2] {TABLE_NGRAM}: {n_ngram} rows")
 
 
@@ -250,7 +254,7 @@ def main() -> None:
     parser.add_argument(
         "--profile",
         default="list1",
-        choices=["list1", "list2"],
+        choices=["list1", "list2", "list3"],
         help="pattern list profile (default: list1)",
     )
     args = parser.parse_args()

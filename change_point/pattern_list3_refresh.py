@@ -1,15 +1,10 @@
 """
-pattern_list2 예측 테이블 수동 갱신 오케스트레이터.
+pattern_list3 예측 테이블 수동 갱신.
 
-사용자가 CLI 또는 compare list2 앱 버튼으로 명시 실행할 때만 동작.
-자동 폴링·v4 저장 hook 없음.
-
-list2 프로필은 테스트 완료 전까지 db_backup/pattern_list2_TEST.db 만 갱신한다.
-라이브(pattern_list2.db)는 livegame_three_modes_v4 전용.
-
-  python3 change_point/pattern_list2_refresh.py --profile list2
-  python3 change_point/pattern_list2_refresh.py --profile list2 --full
-  python3 change_point/pattern_list2_refresh.py --profile list2 --sim-only
+  python3 change_point/pattern_list3_refresh.py --profile list3
+  python3 change_point/pattern_list3_refresh.py --profile list3 --full
+  python3 change_point/pattern_list3_refresh.py --profile list3 --sim-only
+  python3 change_point/pattern_list3_refresh.py --profile list3 --copy-live
 """
 
 from __future__ import annotations
@@ -27,19 +22,20 @@ from build_pattern_list_predictions import (
     build_frequency_predictions,
     upsert_predictions_table,
 )
+from extract_pattern_list3_data import sync_staging_to_db
 from extract_pattern_list_data import (
     STATE_KEY_LAST_GRID_ID,
     get_max_source_grid_string_id,
     load_grid_staging,
     load_ngram_staging,
-    sync_staging_to_db,
 )
-from pattern_list_profiles import TABLE_GRID, TABLE_NGRAM, PatternListProfile, get_profile
-from pattern_list2_sim_predictions import (
+from pattern_list3_compare import build_comparison_df
+from pattern_list3_sim_predictions import (
     build_simulation_predictions_df,
+    copy_sim_table_to_live,
     save_simulation_predictions,
 )
-from pattern_predictions_compare_app import build_comparison_df
+from pattern_list_profiles import TABLE_GRID, TABLE_NGRAM, PatternListProfile, get_profile
 
 KST = timezone(timedelta(hours=9))
 PIPELINE_STATE_TABLE = "pipeline_state"
@@ -47,7 +43,7 @@ PIPELINE_STATE_TABLE = "pipeline_state"
 
 @dataclass
 class RefreshResult:
-    status: str  # ok | unchanged | error
+    status: str
     message: str = ""
     max_grid_string_id: int = 0
     previous_grid_string_id: int = 0
@@ -101,7 +97,6 @@ def set_pipeline_state(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 
 def rebuild_mid_predictions(profile: PatternListProfile) -> tuple[int, int]:
-    """staging 전체 → grid/ngram 예측 테이블 UPSERT."""
     conn = sqlite3.connect(profile.predictions_db)
     try:
         grid_chunks = load_grid_staging(conn)
@@ -143,15 +138,12 @@ def run_refresh(
     final_pred_fn=None,
     classify_final_rule_fn=None,
     rule_version: str | None = None,
+    copy_live: bool = False,
 ) -> RefreshResult:
-    """
-    수동 갱신 실행.
-    - incremental (default): 원본 id 증가분만 staging sync 후 mid+sim UPSERT
-    - full: staging 전량 재적재
-    - sim_only: mid sync 생략, sim UPSERT만
-    - enabled_rules: 적용할 규칙 ID 집합 (R1,R2,R3,R5). 미매칭 prefix → pass
-    """
-    from pattern_list2_final_rules import build_rule_engine
+    from pattern_list3_final_rules import build_rule_engine
+
+    if profile.name != "list3":
+        raise ValueError("pattern_list3_refresh supports list3 only")
 
     if final_pred_fn is None or classify_final_rule_fn is None:
         compute_fn, classify_fn, ver = build_rule_engine(enabled_rules)
@@ -162,7 +154,7 @@ def run_refresh(
         if rule_version is None:
             rule_version = ver
     elif rule_version is None:
-        from pattern_list2_final_rules import DEFAULT_RULE_VERSION
+        from pattern_list3_final_rules import DEFAULT_RULE_VERSION
 
         rule_version = DEFAULT_RULE_VERSION
 
@@ -225,7 +217,7 @@ def run_refresh(
         parts.append(f"sim={result.upserted_sim}")
         result.message = " · ".join(parts)
 
-        from pattern_list2_snapshot import capture_snapshot_after_refresh
+        from pattern_list3_snapshot import capture_snapshot_after_refresh
 
         run_id = capture_snapshot_after_refresh(
             profile,
@@ -239,6 +231,11 @@ def run_refresh(
             result.snapshot_run_id = run_id
             result.message += f" · snapshot={run_id}"
 
+        if copy_live:
+            n_live = copy_sim_table_to_live(profile)
+            result.message += f" · live_copy={n_live}"
+            result.extra["live_rows"] = n_live
+
         return result
     except Exception as e:
         result.status = "error"
@@ -247,22 +244,17 @@ def run_refresh(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="pattern_list2 예측 테이블 수동 갱신")
-    parser.add_argument("--profile", default="list2", choices=["list1", "list2"])
-    parser.add_argument("--full", action="store_true", help="staging 전량 재적재")
-    parser.add_argument("--sim-only", action="store_true", help="sim 테이블만 UPSERT")
-    parser.add_argument(
-        "--rules",
-        default=None,
-        help="적용 규칙 (쉼표 구분, 예: R1,R2,R3,R5). 미지정 시 기본 R1+R2+R3+R5",
-    )
+    parser = argparse.ArgumentParser(description="pattern_list3 예측 테이블 수동 갱신")
+    parser.add_argument("--profile", default="list3", choices=["list3"])
+    parser.add_argument("--full", action="store_true")
+    parser.add_argument("--sim-only", action="store_true")
+    parser.add_argument("--copy-live", action="store_true", help="갱신 후 LIVE DB 복사")
+    parser.add_argument("--rules", default=None)
     args = parser.parse_args()
 
     profile = get_profile(args.profile)
     print(f"profile: {profile.name}")
     print(f"predictions_db: {profile.predictions_db}")
-    if getattr(profile, "is_test_db", False):
-        print("NOTE: TEST DB mode — live pattern_list2.db is not modified")
 
     enabled_rules = None
     if args.rules:
@@ -273,12 +265,12 @@ def main() -> None:
         full=args.full,
         sim_only=args.sim_only,
         enabled_rules=enabled_rules,
+        copy_live=args.copy_live,
     )
 
     print(f"status: {result.status}")
     print(f"mode: {result.mode}")
     print(f"message: {result.message}")
-    print(f"grid_string_id: {result.previous_grid_string_id} -> {result.max_grid_string_id}")
     if result.status == "error":
         sys.exit(1)
 

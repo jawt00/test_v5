@@ -16,7 +16,10 @@ from livegame_mode_registry import (
     mode_label,
 )
 from pattern_list3_ws9_core import to_ws9_core
-from pattern_list_profiles import LIST2_TEST_PREDICTIONS_DB, LIST3_TEST_PREDICTIONS_DB
+from pattern_list_profiles import (
+    LIST2_TEST_PREDICTIONS_DB,
+    LIST3_TEST_PREDICTIONS_DB,
+)
 
 KST = timezone(timedelta(hours=9))
 
@@ -631,24 +634,86 @@ def live_step_for_mode(state: dict, grid_string: str, history: list, user_input:
     }
 
 
+def _live_step_save_key(mode: str, entry: dict) -> str:
+    return (
+        f"{mode}:{entry.get('step', 0)}:"
+        f"{entry.get('position', 0)}:{entry.get('window_size', 0)}:"
+        f"{entry.get('prefix', '')}"
+    )
+
+
+def resolve_list_profile_from_grid(grid_string: str) -> str | None:
+    """
+    Grid 앞쪽 패딩으로 list profile 판별 (세션 전체 고정).
+
+    - bbb / ppp → list3 (ws11 native 10자)
+    - bb / pp   → list2 (ws10 native 9자)
+    """
+    s = (grid_string or "").strip().lower()
+    if not s:
+        return None
+    if s.startswith("bbb") or s.startswith("ppp"):
+        return "list3"
+    if s.startswith("bb") or s.startswith("pp"):
+        return "list2"
+    return None
+
+
+def _should_persist_entry(mode: str, entry: dict, grid_string: str) -> bool:
+    target = resolve_list_profile_from_grid(grid_string)
+    if target is None:
+        return False
+    return get_mode(mode).profile == target
+
+
+def normalize_saved_step_keys(raw) -> set[str]:
+    """session_state용 저장 키 (set/tuple/list 혼용 대응)."""
+    if not raw:
+        return set()
+    out: set[str] = set()
+    for key in raw:
+        if isinstance(key, str):
+            out.add(key)
+        elif isinstance(key, (list, tuple)) and len(key) == 2:
+            out.add(f"{key[0]}:{key[1]}")
+    return out
+
+
+def count_unsaved_live_steps(results: dict, saved_keys, grid_string: str) -> int:
+    keys = normalize_saved_step_keys(saved_keys)
+    total = 0
+    for mode in MODES:
+        for entry in (results.get(mode) or {}).get("history") or []:
+            if not _should_persist_entry(mode, entry, grid_string):
+                continue
+            if _live_step_save_key(mode, entry) not in keys:
+                total += 1
+    return total
+
+
 def save_live_step_results_for_mode(
     mode: str,
     history: list,
-    saved_keys: set,
+    saved_keys,
+    grid_string: str,
 ) -> tuple[int, set]:
-    cfg = get_mode(mode)
-    db_path = _db_path_for_profile(cfg.profile)
+    """이번 세션에서 아직 저장하지 않은 스텝만 grid profile DB에 누적 INSERT."""
+    target = resolve_list_profile_from_grid(grid_string)
+    if target is None or get_mode(mode).profile != target:
+        return 0, normalize_saved_step_keys(saved_keys)
+    db_path = _db_path_for_profile(target)
     created_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
     inserted = 0
-    new_keys = set(saved_keys)
+    new_keys = normalize_saved_step_keys(saved_keys)
 
     conn = sqlite3.connect(db_path, timeout=20.0, check_same_thread=False)
     try:
         _init_live_step_results_schema(conn)
         conn.execute("BEGIN")
         for entry in history or []:
-            step = entry.get("step", 0)
-            key = (mode, step)
+            if not _should_persist_entry(mode, entry, grid_string):
+                continue
+            key = _live_step_save_key(mode, entry)
             if key in new_keys:
                 continue
             conn.execute(
@@ -660,7 +725,7 @@ def save_live_step_results_for_mode(
                 """,
                 (
                     created_at,
-                    step,
+                    entry.get("step", 0),
                     entry.get("position", 0),
                     entry.get("anchor", 0),
                     entry.get("window_size", 0),
@@ -684,14 +749,37 @@ def save_live_step_results_for_mode(
         conn.close()
 
 
-def save_all_live_step_results(results: dict, saved_keys: set) -> tuple[int, set]:
+def live_save_db_name(profile: str | None) -> str | None:
+    if not profile:
+        return None
+    return _db_path_for_profile(profile).name
+
+
+def unsaved_save_db_name(results: dict, saved_keys, grid_string: str) -> str | None:
+    """미저장 스텝이 들어갈 TEST DB 파일명."""
+    target = resolve_list_profile_from_grid(grid_string)
+    if target is None:
+        return None
+    if count_unsaved_live_steps(results, saved_keys, grid_string) == 0:
+        return None
+    return live_save_db_name(target)
+
+
+def save_all_live_step_results(
+    results: dict, saved_keys, grid_string: str
+) -> tuple[int, set, str | None]:
+    target = resolve_list_profile_from_grid(grid_string)
+    if target is None:
+        return 0, normalize_saved_step_keys(saved_keys), None
     total_inserted = 0
-    keys = set(saved_keys)
+    keys = normalize_saved_step_keys(saved_keys)
     for mode in MODES:
+        if get_mode(mode).profile != target:
+            continue
         hist = (results.get(mode) or {}).get("history") or []
-        n, keys = save_live_step_results_for_mode(mode, hist, keys)
+        n, keys = save_live_step_results_for_mode(mode, hist, keys, grid_string)
         total_inserted += n
-    return total_inserted, keys
+    return total_inserted, keys, target
 
 
 CELLS_PER_ROW = 35

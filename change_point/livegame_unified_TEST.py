@@ -38,6 +38,10 @@ from livegame_engine import (
     predict_next_for_mode,
     render_grid_string_and_anchors,
     save_all_live_step_results,
+    count_unsaved_live_steps,
+    live_save_db_name,
+    unsaved_save_db_name,
+    normalize_saved_step_keys,
     set_use_test_db,
 )
 from livegame_mode_registry import DISPLAY_ORDER, MODES, mode_label
@@ -62,7 +66,7 @@ def main() -> None:
     if "flow_result" not in st.session_state:
         st.session_state.flow_result = None
     if "flow_saved_step_keys" not in st.session_state:
-        st.session_state.flow_saved_step_keys = set()
+        st.session_state.flow_saved_step_keys = []
 
     grid_input = st.text_area(
         "Grid String",
@@ -86,7 +90,7 @@ def main() -> None:
                         for mode in MODES:
                             results[mode] = cold_start_for_mode(s, mode)
                         st.session_state.flow_result = {"grid_string": s, "results": results}
-                        st.session_state.flow_saved_step_keys = set()
+                        st.session_state.flow_saved_step_keys = []
                         st.session_state.pop("flow_last_save_info", None)
                         st.rerun()
                     except Exception as e:
@@ -94,7 +98,7 @@ def main() -> None:
     with col_reset:
         if st.button("초기화", use_container_width=True, key="flow_btn_reset"):
             st.session_state.flow_result = None
-            st.session_state.flow_saved_step_keys = set()
+            st.session_state.flow_saved_step_keys = []
             st.session_state.pop("flow_last_save_info", None)
             st.rerun()
 
@@ -172,24 +176,55 @@ def main() -> None:
                 m1.metric("스텝", summ.get("total_steps", 0))
                 m2.metric("예측", summ.get("total_predictions", 0))
                 m3.metric("정확도", f"{summ.get('accuracy', 0):.1f}%")
-        if st.session_state.get("flow_last_save_info"):
-            last = st.session_state.flow_last_save_info
-            st.caption(
-                f"마지막 저장 {last.get('created_at', '')} · "
-                f"+{last.get('inserted', 0)} · 누적 {last.get('session_total', 0)}"
-            )
-        if st.button("결과 저장", key="flow_save_results", type="secondary", use_container_width=True):
+
+        unsaved = count_unsaved_live_steps(
+            results, st.session_state.flow_saved_step_keys, gs
+        )
+        target_db = unsaved_save_db_name(
+            results, st.session_state.flow_saved_step_keys, gs
+        )
+        save_clicked = st.button(
+            "결과 저장",
+            key="flow_save_results",
+            type="secondary",
+            use_container_width=True,
+            disabled=unsaved == 0,
+        )
+        if unsaved > 0:
+            db_hint = f" · `{target_db}`" if target_db else ""
+            st.caption(f"미저장 **{unsaved}**건{db_hint}")
+        last = st.session_state.get("flow_last_save_info")
+        if last and last.get("message"):
+            st.caption(last["message"])
+
+        if save_clicked:
             try:
-                saved_keys = st.session_state.get("flow_saved_step_keys") or set()
-                inserted, new_keys = save_all_live_step_results(results, saved_keys)
-                st.session_state.flow_saved_step_keys = new_keys
+                saved_keys = st.session_state.get("flow_saved_step_keys") or []
+                inserted, new_keys, saved_profile = save_all_live_step_results(
+                    results, saved_keys, gs
+                )
+                db_name = live_save_db_name(saved_profile)
+                st.session_state.flow_saved_step_keys = sorted(new_keys)
+                now = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+                if inserted == 0:
+                    msg = (
+                        f"✓ {now} · 이번 세션에서 이미 저장함 "
+                        f"(추가 0건 · 세션 {len(new_keys)}건)"
+                    )
+                else:
+                    db_part = f" · `{db_name}`" if db_name else ""
+                    msg = (
+                        f"✓ {now} · 저장 완료 +{inserted}건{db_part} "
+                        f"(세션 누적 {len(new_keys)}건)"
+                    )
                 st.session_state.flow_last_save_info = {
-                    "created_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
+                    "created_at": now,
                     "inserted": inserted,
                     "session_total": len(new_keys),
+                    "saved_profile": saved_profile,
+                    "db_name": db_name,
+                    "message": msg,
                 }
-                if inserted == 0:
-                    st.info("저장할 새 스텝이 없습니다.")
                 st.rerun()
             except Exception as e:
                 st.error(f"저장 실패: {e}")

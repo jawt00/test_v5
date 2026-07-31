@@ -25,7 +25,7 @@ from svg_parser_module import (
 )
 # 파싱에 사용하는 메인 컨테이너 클래스명 (모듈 상수와 동기화, 없으면 기본값)
 # [유지보수] 클래스명 변경 시 가이드 8번과 함께 fallback 값 수정 (콘솔 복사 명령에 사용)
-BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'wn_ws')
+BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'wu_wz')
 
 # 페이지 설정
 st.set_page_config(
@@ -718,8 +718,8 @@ def main():
         
         1. **SVG 코드 입력 및 파싱**
            - SVG 코드를 텍스트 영역에 붙여넣고 '파싱' 버튼 클릭
-           - 현재 지원하는 클래스명: `wn_ws` (메인 컨테이너), `wn_vL` (행), `wn_wu` (셀)
-           - 브라우저에서 그리드 복사: 개발자도구 콘솔에 `copy(document.querySelector('.wn_ws').outerHTML);` 실행
+           - 현재 지원하는 클래스명: `wu_wz` (메인 컨테이너), `wu_vS` (행), `wu_wB` (셀)
+           - 브라우저에서 그리드 복사: 개발자도구 콘솔에 `copy(document.querySelector('.wu_wz').outerHTML);` 실행
            - 파싱된 Grid String과 시각화가 표시됩니다
         
         2. **DB 저장 (자동 N-gram 생성 포함)**

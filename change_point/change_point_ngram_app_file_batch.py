@@ -25,9 +25,9 @@ from svg_parser_module import (
 # [OPTIONAL P/B/T] 제거 시 아래 import 및 _parse_bead_road_html 내 호출 삭제
 from svg_parser_pbt_extension import parse_bead_road_svg_with_pbt_fallback
 # 파싱에 사용하는 메인 컨테이너 클래스명 (모듈 상수와 동기화, 없으면 기본값)
-BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'wn_ws')
-BEAD_ROAD_ROW_CLASS = getattr(_svg_parser, 'BEAD_ROAD_ROW_CLASS', 'wn_vL')
-BEAD_ROAD_CELL_CLASS = getattr(_svg_parser, 'BEAD_ROAD_CELL_CLASS', 'wn_wu')
+BEAD_ROAD_MAIN_CONTAINER_CLASS = getattr(_svg_parser, 'BEAD_ROAD_MAIN_CONTAINER_CLASS', 'wu_wz')
+BEAD_ROAD_ROW_CLASS = getattr(_svg_parser, 'BEAD_ROAD_ROW_CLASS', 'wu_vS')
+BEAD_ROAD_CELL_CLASS = getattr(_svg_parser, 'BEAD_ROAD_CELL_CLASS', 'wu_wB')
 
 MAX_BATCH_FILES = 20
 

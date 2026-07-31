@@ -26,10 +26,10 @@ from svg_parser_module import (
 # Save Page / SingleFile 저장 시 Bead Road가 iframe srcdoc 안에 있는 경우
 _IFRAME_SRC_ATTRS = ("srcdoc", "data-savepage-srcdoc")
 
-# [유지보수] P/B/T Bead Road 그리드 클래스명 (샘플 HTML 2026-07-22 기준)
-PBT_BEAD_ROAD_MAIN_CONTAINER_CLASS = "wn_ws"
-PBT_BEAD_ROAD_ROW_CLASS = "wn_vL"
-PBT_BEAD_ROAD_CELL_CLASS = "wn_wu"
+# [유지보수] P/B/T Bead Road 그리드 클래스명 (샘플 HTML 2026-07-31 기준)
+PBT_BEAD_ROAD_MAIN_CONTAINER_CLASS = "wu_wz"
+PBT_BEAD_ROAD_ROW_CLASS = "wu_vS"
+PBT_BEAD_ROAD_CELL_CLASS = "wu_wB"
 
 
 def _empty_grid():
@@ -61,14 +61,14 @@ def _cell_value_pbt(cell) -> str:
         if upper == "T" or "무" in text_content:
             return "t"
 
-    # 2) 클래스 변형 (nM_nV=P, nM_nU=B, nM_nT=T / oP_oY=P, oP_oX=B, oP_oW=T)
+    # 2) 클래스 변형 (nM_nV=P, nM_nU=B, nM_nT=T / oP_oY=P, oP_oX=B, oP_oW=T / pm_pv=P, pm_pu=B, pm_pt=T)
     for div in cell.find_all("div", class_=True):
         classes = div.get("class") or []
-        if "nM_nV" in classes or "oP_oY" in classes:
+        if "nM_nV" in classes or "oP_oY" in classes or "pm_pv" in classes:
             return "p"
-        if "nM_nU" in classes or "oP_oX" in classes:
+        if "nM_nU" in classes or "oP_oX" in classes or "pm_pu" in classes:
             return "b"
-        if "nM_nT" in classes or "oP_oW" in classes:
+        if "nM_nT" in classes or "oP_oW" in classes or "pm_pt" in classes:
             return "t"
 
     # 3) SVG 색상 fallback (기존 한글 파서와 동일 계열)

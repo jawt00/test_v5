@@ -8,7 +8,7 @@ import os
 st.set_page_config(page_title="Game Mode Session Manager", page_icon="🎮", layout="wide")
 
 st.title("🎮 POSITIVE / NEGATIVE 게임 세션 매니저")
-st.markdown("<b>POSITIVE</b> / <b>NEGATIVE</b> 게임 타입을 무작위로 추첨하고, 6회차 진행 및 PASS/FAIL 실행 로그를 기록하는 도구입니다.", unsafe_allow_html=True)
+st.markdown("<b>POSITIVE</b> / <b>NEGATIVE</b> 게임 타입 및 <b>[숫자, 문자]</b> 모드를 무작위로 추첨하고, 8회차 진행 로그를 기록하는 도구입니다.", unsafe_allow_html=True)
 
 # 저장할 CSV 파일 및 폴더 경로 설정
 SAVE_DIR = "/Users/tj/test_v5/tests"
@@ -23,52 +23,71 @@ if "sessions" not in st.session_state:
 if "history_df" not in st.session_state:
     if os.path.exists(LOG_FILE):
         df_loaded = pd.read_csv(LOG_FILE)
-        # 구버전 CSV의 'status' 컬럼을 'result'로 자동 마이그레이션 (KeyError 방지)
+        # 구버전 CSV 컬럼 호환 처리
         if "status" in df_loaded.columns and "result" not in df_loaded.columns:
             df_loaded = df_loaded.rename(columns={"status": "result"})
         st.session_state.history_df = df_loaded
     else:
-        st.session_state.history_df = pd.DataFrame(columns=["session_id", "turn", "game_type", "result", "timestamp"])
+        st.session_state.history_df = pd.DataFrame(columns=["session_id", "turn", "game_type", "number_type", "char_type", "result", "timestamp"])
 
 # 2. 메인 탭 구성
-tab1, tab2 = st.tabs(["🕹️ 게임 실행 (6회차)", "📊 기록 관리 & CSV 다운로드"])
+tab1, tab2 = st.tabs(["🕹️ 게임 실행 (8회차)", "📊 기록 관리 & CSV 다운로드"])
 
 with tab1:
-    # 요구사항 2: 사이드바 제거 및 메인 상단에 생성 버튼 배치
     col_btn, col_info = st.columns([1, 2])
     with col_btn:
-        if st.button("🎲 새로운 6회 게임 무작위 생성", use_container_width=True):
+        if st.button("🎲 새로운 8회 게임 무작위 생성", use_container_width=True):
             modes = ["POSITIVE", "NEGATIVE"]
+            chars = ["B", "P"]
             new_session_id = f"SESS_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             st.session_state.current_session_id = new_session_id
             
+            # 숫자 타입 (9 / 10 교대)
+            start_num = random.choice([9, 10])
+            num_types = [9 if (i % 2 == 0) else 10 for i in range(8)] if start_num == 9 else [10 if (i % 2 == 0) else 9 for i in range(8)]
+            
+            # 요구사항 1: 문자 타입 (B 또는 P)을 모든 회차마다 완전히 무작위(Random) 선택
+            char_types = [random.choice(chars) for _ in range(8)]
+            
+            # 1~8회차 세션 생성
             st.session_state.sessions = [
                 {
                     "session_id": new_session_id,
-                    "turn": i + 1,
-                    "game_type": random.choice(modes),
+                    "turn": i + 1,               # 회차 (1~8)
+                    "game_type": random.choice(modes), # POSITIVE / NEGATIVE (무작위)
+                    "number_type": num_types[i], # 9 / 10 (교대)
+                    "char_type": char_types[i],   # B / P (완전 무작위)
                     "result": "미실행",
                     "timestamp": "-"
                 }
-                for i in range(6)
+                for i in range(8)
             ]
             st.rerun()
 
     if not st.session_state.sessions:
-        st.info("상단의 **[새로운 6회 게임 무작위 생성]** 버튼을 눌러주세요.")
+        st.info("상단의 **[새로운 8회 게임 무작위 생성]** 버튼을 눌러주세요.")
     else:
         st.subheader(f"현재 진행 중인 세션 ID: {st.session_state.sessions[0]['session_id']}")
         
-        # 요구사항 3: 6개 카드가 한 화면에 일관되게 노출되도록 배치
-        cols = st.columns(3)
+        # 8개 카드가 깔끔하게 배치되도록 4열 Layout 사용
+        cols = st.columns(4)
         for idx, item in enumerate(st.session_state.sessions):
-            col = cols[idx % 3]
+            col = cols[idx % 4]
             with col:
                 with st.container(border=True):
-                    # 요구사항 1: POSITIVE는 RED (#d32f2f), NEGATIVE는 BLUE (#1976d2) 로 변경
+                    # POSITIVE는 RED (#d32f2f), NEGATIVE는 BLUE (#1976d2)
                     badge_color = "#d32f2f" if item["game_type"] == "POSITIVE" else "#1976d2"
+                    
                     st.markdown(f"### {item['turn']} 회차")
-                    st.markdown(f"<h2 style='color:{badge_color}; margin:0;'>{item['game_type']}</h2>", unsafe_allow_html=True)
+                    
+                    # 요구사항 2: POSITIVE/NEGATIVE 폰트 조금 키우고(20px), [ 9 , B ] 모드와 줄바꿈(block) 처리
+                    st.markdown(
+                        f"<div style='margin-bottom: 10px;'>"
+                        f"<div style='font-size:20px; font-weight:bold; color:{badge_color}; margin-bottom:4px;'>{item['game_type']}</div>"
+                        f"<div style='font-size:24px; font-weight:bold; color:#111;'>[ {item['number_type']} , {item['char_type']} ]</div>"
+                        f"</div>", 
+                        unsafe_allow_html=True
+                    )
                     
                     # 결과 색상 표기
                     res_color = "gray"

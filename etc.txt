@@ -134,7 +134,9 @@ streamlit run change_point_ngram_app.py
 streamlit run change_point_ngram_app_file_batch.py --server.port 8502
 
 streamlit run pattern_predictions_compare_app_list2.py --server.port 8503
+streamlit run pattern_predictions_compare_app_list3.py
 
+ 
 streamlit run livegame_three_modes_v4_TEST.py --server.port 8504
 
 streamlit run livegame_unified_TEST.py --server.port 8504

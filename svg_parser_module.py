@@ -16,9 +16,9 @@ TABLE_HEIGHT = 6
 
 # [유지보수] Bead Road 그리드 HTML 클래스명 (변경 시 parse_bead_road_svg 및 docstring 동기화)
 # 2026-07-22: uS_uX/uS_uq/uS_uZ → wn_ws/wn_vL/wn_wu
-BEAD_ROAD_MAIN_CONTAINER_CLASS = 'xf_xk'
-BEAD_ROAD_ROW_CLASS = 'xf_vt'
-BEAD_ROAD_CELL_CLASS = 'xf_xm'
+BEAD_ROAD_MAIN_CONTAINER_CLASS = 'xt_xy'
+BEAD_ROAD_ROW_CLASS = 'xt_wL'
+BEAD_ROAD_CELL_CLASS = 'xt_xz'
 
 # DB 경로 (hypothesis_validation_app.py와 동일한 DB 사용)
 DB_PATH = 'hypothesis_validation.db'
